@@ -21,6 +21,11 @@ deterministicas (ODE_SEED=42, ODE_CASE=1):
    exactamente un reinicio. Las cifras esperadas asumen los defaults
    (poblacion 100, fracciones 0.80/0.40): el checker aisla ODE_POP y las
    fracciones del entorno.
+6. La cabecera de_run_start informa el warm start real (issues #144/#146):
+   con ODE_WARM_START=1 y ODE_POP=200 la cuota ceil(0.05*200)=10 inyecta el
+   catalogo completo y la cabecera debe reportar warm_start=1 y
+   warm_seeds=10. Es la via publica del contrato de #144; los tests C++ solo
+   cubren el retorno de createPopulation.
 
 En Python seria el equivalente a un test de integracion de pytest que ejecuta
 el entry point como subproceso y valida su stdout.
@@ -93,12 +98,14 @@ def correr_main(con_modo=None, extra_env=None):
     )
 
 
-def errores_del_log(lineas, modo_esperado, reinicio_esperado):
+def errores_del_log(lineas, modo_esperado, reinicio_esperado, warm_esperado=None):
     """Devuelve la lista de incumplimientos del contrato (vacia si todo bien).
 
     `reinicio_esperado` es None si la corrida no debe reiniciar, o la tupla
     (fraction, kept, replaced) que debe informar la linea restart | (issue
-    #127)."""
+    #127). `warm_esperado` es None si la corrida es fria, o la tupla
+    (warm_start, warm_seeds) que la cabecera debe informar (issues
+    #144/#146)."""
     errores = []
 
     # 1. Ninguna linea suelta: todas pasan por los helpers.
@@ -148,24 +155,41 @@ def errores_del_log(lineas, modo_esperado, reinicio_esperado):
                         f"restart | no informa {campo}: {linea!r}"
                     )
 
+    # 6. La cabecera informa el warm start real (issues #144/#146): con
+    # ODE_WARM_START=1 y ODE_POP=200 la cuota ceil(0.05*200)=10 inyecta el
+    # catalogo completo y debe reportar warm_start=1 y warm_seeds=10.
+    if warm_esperado is not None and cabecera is not None:
+        warm_start, warm_seeds = warm_esperado
+        for campo in (f"warm_start={warm_start}", f"warm_seeds={warm_seeds}"):
+            if campo not in cabecera:
+                errores.append(
+                    f"la cabecera no informa {campo}: {cabecera!r}"
+                )
+
     return errores
 
 
 def main():
-    # Dos corridas (issue #126/#127): sin ODE_RESTART_MODE (default legacy) y
-    # con ODE_RESTART_MODE=adaptive. Ambas fuerzan un unico reinicio
-    # deterministico (ODE_STALE_LIMIT=1, ODE_GEN=2) y deben informar su modo
-    # en la cabecera y las cifras del reinicio en la linea restart |: legacy
-    # conserva su fraccion 0.80 y adaptive usa el primer escalon de la escalera
-    # (0.40).
+    # Tres corridas (issues #126/#127/#144): dos frias con un unico reinicio
+    # deterministico (ODE_STALE_LIMIT=1, ODE_GEN=2) y una caliente sin
+    # reinicio (ODE_WARM_START=1, ODE_POP=200). Las frias deben informar su
+    # modo en la cabecera y las cifras del reinicio en la linea restart |:
+    # legacy conserva su fraccion 0.80 y adaptive usa el primer escalon de la
+    # escalera (0.40). La caliente debe informar warm_start=1 y warm_seeds=10
+    # (la cuota ceil(0.05*200)=10 del issue #146).
     errores = []
     reinicio_env = {"ODE_STALE_LIMIT": "1", "ODE_GEN": "2"}
-    for nombre, con_modo, modo_esperado, reinicio_esperado in (
-        ("default (legacy)", None, "legacy", ("0.80", "20", "80")),
-        ("adaptive", "adaptive", "adaptive", ("0.40", "60", "40")),
-    ):
+    warm_env = {"ODE_WARM_START": "1", "ODE_POP": "200"}
+    escenarios = (
+        ("default (legacy)", None, reinicio_env, "legacy",
+         ("0.80", "20", "80"), None),
+        ("adaptive", "adaptive", reinicio_env, "adaptive",
+         ("0.40", "60", "40"), None),
+        ("warm start pop=200", None, warm_env, "legacy", None, ("1", "10")),
+    )
+    for nombre, con_modo, extra_env, modo_esperado, reinicio_esperado, warm_esperado in escenarios:
         try:
-            proc = correr_main(con_modo, reinicio_env)
+            proc = correr_main(con_modo, extra_env)
         except subprocess.TimeoutExpired:
             print("check_run_log: build/ode-solver excedio los 60s", file=sys.stderr)
             return 1
@@ -176,7 +200,8 @@ def main():
             return 1
 
         lineas = [linea for linea in proc.stdout.splitlines() if linea.strip()]
-        errores.extend(errores_del_log(lineas, modo_esperado, reinicio_esperado))
+        errores.extend(errores_del_log(lineas, modo_esperado,
+                                       reinicio_esperado, warm_esperado))
         print(f"check_run_log: corrida {nombre}: {len(lineas)} lineas")
 
     if errores:
@@ -185,7 +210,7 @@ def main():
         return 1
 
     print("check_run_log: PASS | formato, firma del autor, claves del A/B, "
-          "restart_mode y restart | intactos")
+          "restart_mode, restart | y warm_start/warm_seeds intactos")
     return 0
 
 

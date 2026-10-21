@@ -25,7 +25,7 @@ Domain-specific terms used in this codebase.
 | **DE/rand/1/bin** | The DE variant used here: a random base individual `x_r1` plus one scaled difference vector `F*(x_r2 - x_r3)`, followed by binomial crossover |
 | **Dither** | Drawing the scaling factor `F` randomly (here once per mutation) instead of keeping it fixed |
 | **Trial vector** | The offspring produced by mutation and binomial crossover for one target individual, before selection decides whether it replaces it |
-| **Warm start** | Starting the population from a per-case catalog of known candidate expressions (case bases first) instead of an all-random draw; opt-in via `ODE_WARM_START=1`. Entries are padded with constant-1 tokens to the configured dimension |
+| **Warm start** | Starting the population from a per-case catalog of known candidate expressions (case bases first, then the five preloaded prototype seeds) instead of an all-random draw; opt-in via `ODE_WARM_START=1`. Entries are padded with constant-1 tokens to the configured dimension, capped at `min(ceil(0.05 × population), catalog size)` |
 | **Recombination / Crossover** | Combining tokens from two or more parent individuals to produce offspring |
 | **Generation** | One iteration of the evolutionary loop |
 | **Convergence** | When fitness drops below a threshold (1e-5), indicating a sufficiently good solution has been found |
