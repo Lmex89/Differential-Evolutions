@@ -22,6 +22,7 @@
 #include "dualfunctions.h"  // ahora autocontenido: incluye <vector>/<string> por si mismo
 #include "token.h"          // expone el contrato publico del rango del alfabeto
 #include "precargadas_prototipo.h"  // oraculo independiente del tramo precargado (#144)
+#include "genericos_esperados.h"    // oraculo independiente del tramo generico (#145)
 
 // En vez de declarar prototipos sueltos, este test incluye parse_tree.cpp
 // entero: createPopulation y FunbObj viven ahi sin header. En Python seria
@@ -181,12 +182,13 @@ static void test_warm_start_opt_in() {
 }
 
 // -------------------------------------------------------------------------
-// Slice 4b (issues #142-#144): el catalogo warm start es por caso y todos los
-// casos 0..7 aportan diez entradas. Las primeras cinco son las bases: la
-// primera es la solucion exacta (o, en el caso 1, la familia de la serie
+// Slice 4b (issues #142-#145): el catalogo warm start es por caso y todos los
+// casos 0..7 aportan veinticinco entradas. Las primeras cinco son las bases:
+// la primera es la solucion exacta (o, en el caso 1, la familia de la serie
 // truncada de Si(x)) y las otras cuatro son bloques cercanos de la misma
 // familia. Las cinco siguientes son las semillas precargadas del prototipo,
-// con su contenido intacto. Cada entrada debe ser una expresion prefija
+// con su contenido intacto. Las ultimas quince son los bloques genericos
+// compartidos (issue #145). Cada entrada debe ser una expresion prefija
 // completa y depender de x; las bases ademas evaluan a fitness finita.
 // -------------------------------------------------------------------------
 
@@ -197,22 +199,22 @@ static long double fitness_de_base(const vector<ldouble>& base, int caso) {
     return individuo.fitness();
 }
 
-// Total del catalogo: bases del caso + precargadas del prototipo. Las
-// constantes llegan de parse_tree.cpp (incluido arriba), la misma fuente que
-// la produccion usa para armar el catalogo.
-constexpr size_t TOTAL_CATALOGO = NUM_BASES_POR_CASO + NUM_PRECARGADAS;
+// Total del catalogo: bases del caso + precargadas del prototipo + genericos
+// compartidos. Las constantes llegan de parse_tree.cpp (incluido arriba), la
+// misma fuente que la produccion usa para armar el catalogo.
+constexpr size_t TOTAL_CATALOGO = NUM_BASES_POR_CASO + NUM_PRECARGADAS + NUM_BLOQUES_GENERICOS;
 
-// validar_bases_catalogo: verifica que todas las entradas de un caso (bases y
-// precargadas) rendericen completas y dependan de x; ademas, que las cinco
-// bases tengan fitness finita. En Python seria
-// `assert all(valida(b) for b in bases)` mas las comprobaciones de forma sobre
-// el catalogo completo.
-static void validar_bases_catalogo(const vector<vector<ldouble>>& catalogo, int caso) {
+// validar_catalogo: verifica que todas las entradas de un caso (bases,
+// precargadas y genericos) rendericen completas y dependan de x; ademas, que
+// las cinco bases tengan fitness finita. En Python seria
+// `assert all(valida(b) for b in catalogo)` mas las comprobaciones de forma.
+static void validar_catalogo(const vector<EntradaCatalogo>& catalogo, int caso) {
     bool completas = true;
     bool dependen_de_x = true;
     bool bases_finitas = true;
     size_t indice = 0;
-    for (const auto& base : catalogo) {
+    for (const EntradaCatalogo& entrada : catalogo) {
+        const vector<ldouble>& base = entrada.get();
         FunbObj individuo(base, 0.0L, 1.0L, caso);
         if (individuo.represant().find("()") != string::npos) {
             completas = false;
@@ -234,8 +236,12 @@ static void validar_bases_catalogo(const vector<vector<ldouble>>& catalogo, int 
         indice++;
     }
     const string etiqueta = "caso " + std::to_string(caso) + ": ";
-    check_bool(etiqueta + "las diez entradas renderizan completas", completas);
-    check_bool(etiqueta + "las diez entradas dependen de x", dependen_de_x);
+    check_bool(etiqueta + "las " + std::to_string(TOTAL_CATALOGO) +
+                   " entradas renderizan completas",
+               completas);
+    check_bool(etiqueta + "las " + std::to_string(TOTAL_CATALOGO) +
+                   " entradas dependen de x",
+               dependen_de_x);
     check_bool(etiqueta + "las bases tienen fitness finita", bases_finitas);
 }
 
@@ -244,13 +250,17 @@ static void test_catalogo_semillas_por_caso() {
 
     for (const int caso : casos) {
         const string etiqueta = "caso " + std::to_string(caso) + ": ";
-        const vector<vector<ldouble>>& catalogo = catalogo_semillas(caso);
+        const vector<EntradaCatalogo>& catalogo = catalogo_semillas(caso);
 
-        check_int(etiqueta + "el catalogo tiene diez entradas (5 bases + 5 precargadas)",
+        check_int(etiqueta + "el catalogo tiene " +
+                      std::to_string(TOTAL_CATALOGO) + " entradas (" +
+                      std::to_string(NUM_BASES_POR_CASO) + " bases + " +
+                      std::to_string(NUM_PRECARGADAS) + " precargadas + " +
+                      std::to_string(NUM_BLOQUES_GENERICOS) + " genericos)",
                   static_cast<int>(catalogo.size()),
                   static_cast<int>(TOTAL_CATALOGO));
 
-        validar_bases_catalogo(catalogo, caso);
+        validar_catalogo(catalogo, caso);
 
         // El tramo precargado ocupa los indices 5-9 y conserva exactamente
         // los tokens del prototipo (issue #144).
@@ -260,7 +270,7 @@ static void test_catalogo_semillas_por_caso() {
         for (size_t i = 0;
              i < legado.size() && NUM_BASES_POR_CASO + i < catalogo.size();
              i++) {
-            if (catalogo[NUM_BASES_POR_CASO + i] != legado[i]) {
+            if (catalogo[NUM_BASES_POR_CASO + i].get() != legado[i]) {
                 precargadas_intactas = false;
             }
         }
@@ -273,8 +283,8 @@ static void test_catalogo_semillas_por_caso() {
             // truncada de tres terminos x - x^3/18 + x^5/600. El limite es
             // holgado porque la serie solo aproxima la integral exacta.
             long double mejor = INFINITY;
-            for (const auto& base : catalogo) {
-                const long double fit = fitness_de_base(base, caso);
+            for (size_t i = 0; i < NUM_BASES_POR_CASO && i < catalogo.size(); i++) {
+                const long double fit = fitness_de_base(catalogo[i].get(), caso);
                 if (fit < mejor) mejor = fit;
             }
             check_bool(etiqueta +
@@ -285,7 +295,7 @@ static void test_catalogo_semillas_por_caso() {
             check_bool(etiqueta +
                            "la base exacta (primera) tiene fitness < 1e-6",
                        !catalogo.empty() &&
-                           fitness_de_base(catalogo[0], caso) < 1e-6L);
+                           fitness_de_base(catalogo[0].get(), caso) < 1e-6L);
         }
     }
 
@@ -294,9 +304,9 @@ static void test_catalogo_semillas_por_caso() {
     const vector<ldouble> legendre = {
         TOKEN_DIV, TOKEN_ADD, TOKEN_MUL, TOKEN_CONST3,
         TOKEN_X2, TOKEN_NEG, TOKEN_CONST1, TOKEN_CONST2};
-    const vector<vector<ldouble>>& caso6 = catalogo_semillas(6);
+    const vector<EntradaCatalogo>& caso6 = catalogo_semillas(6);
     check_bool("la base exacta del caso 6 sigue siendo (3x^2-1)/2",
-               !caso6.empty() && caso6[0] == legendre);
+               !caso6.empty() && caso6[0].get() == legendre);
 
     // Un caso fuera de 0..7 no inventa bases: el contrato del catalogo es
     // explicito y no depende del clamp de main().
@@ -304,24 +314,89 @@ static void test_catalogo_semillas_por_caso() {
                catalogo_semillas(8).empty());
 }
 
+// genericos_compartidos: comprueba que el tramo generico de un catalogo son
+// las mismas instancias que bloques_genericos(), en los indices 10-24. En
+// Python seria `all(catalogo[i] is GENERICOS[i - 10] for i in ...)`.
+static bool genericos_compartidos(const vector<EntradaCatalogo>& catalogo) {
+    const vector<vector<ldouble>>& genericos = bloques_genericos();
+    if (catalogo.size() < NUM_BASES_POR_CASO + NUM_PRECARGADAS + genericos.size()) {
+        return false;
+    }
+    for (size_t i = 0; i < genericos.size(); i++) {
+        const size_t indice = NUM_BASES_POR_CASO + NUM_PRECARGADAS + i;
+        if (&catalogo[indice].get() != &genericos[i]) return false;
+    }
+    return true;
+}
+
+// Issue #145: el tier generico (indices 10-24) es compartido entre todos los
+// casos. Verificamos el contenido exacto contra un oraculo independiente, que
+// los ocho catalogos referencian las mismas instancias y que su fitness es
+// finita en todos los casos.
+static void test_genericos_compartidos_entre_casos() {
+    const std::array<int, 8> casos = {0, 1, 2, 3, 4, 5, 6, 7};
+    const vector<vector<ldouble>>& genericos = bloques_genericos();
+    const vector<vector<ldouble>>& esperados = genericos_del_issue_145();
+
+    // En Python seria `assert genericos == GENERICOS_REFERENCIA`.
+    bool contenido_exacto = genericos.size() == esperados.size();
+    for (size_t i = 0; i < genericos.size() && i < esperados.size(); i++) {
+        if (genericos[i] != esperados[i]) contenido_exacto = false;
+    }
+    check_bool("los " + std::to_string(NUM_BLOQUES_GENERICOS) +
+                   " genericos conservan el contenido exacto del issue #145",
+               contenido_exacto);
+
+    // En Python seria
+    // `assert all(catalogo_semillas(c)[10 + i] is GENERICOS[i]
+    //            for c in casos for i in range(15))`.
+    bool compartidos = true;
+    for (const int caso : casos) {
+        if (!genericos_compartidos(catalogo_semillas(caso))) {
+            compartidos = false;
+        }
+    }
+    check_bool("los " + std::to_string(NUM_BLOQUES_GENERICOS) +
+                   " genericos son las mismas instancias en los ocho casos",
+               compartidos);
+
+    // En Python seria
+    // `assert all(math.isfinite(fitness(g, c)) for g in genericos for c in casos)`.
+    bool finitos = true;
+    for (const auto& generico : genericos) {
+        for (const int caso : casos) {
+            if (!std::isfinite(fitness_de_base(generico, caso))) {
+                finitos = false;
+            }
+        }
+    }
+    check_bool("los " + std::to_string(NUM_BLOQUES_GENERICOS) +
+                   " genericos evaluan a fitness finita en todos los casos",
+               finitos);
+}
+
 // -------------------------------------------------------------------------
 // Slice 4c (issues #142-#146): createPopulation inyecta las entradas del
 // catalogo del caso al frente de la poblacion, rellenas con constantes 1 hasta
-// la dimension configurada. El orden es bases (0-4) y precargadas (5-9). La
-// inyeccion respeta la cuota del 5% (issue #146) y no consume RNG: la cola
-// aleatoria coincide con la de una poblacion fria de la misma semilla.
+// la dimension configurada. El orden es bases (0-4), precargadas (5-9) y
+// genericos (10-24). La inyeccion respeta la cuota del 5% (issue #146) y no
+// consume RNG: la cola aleatoria coincide con la de una poblacion fria de la
+// misma semilla.
 // -------------------------------------------------------------------------
 
 static void test_warm_start_inyecta_el_catalogo_del_caso() {
     const std::array<int, 8> casos = {0, 1, 2, 3, 4, 5, 6, 7};
     const std::array<int, 3> dimensiones = {20, 25, 30};
-    // El issue #144 fija pop=200 como escenario: el catalogo completo (5 bases
-    // + 5 precargadas) entra y la cabecera debe reportar warm_seeds=10.
-    constexpr int POBLACION_CATALOGO_COMPLETO = 200;
+    // El issue #145 completa el catalogo a 25 entradas (5 bases + 5 precargadas
+    // + 15 genericos). Con pop=500, la cuota del 5% es ceil(0.05*500)=25, lo
+    // que permite inyectar el catalogo completo y la cabecera debe reportar
+    // warm_seeds=25.
+    constexpr int POBLACION_CATALOGO_COMPLETO = 500;
 
     for (const int caso : casos) {
-        const vector<vector<ldouble>>& catalogo = catalogo_semillas(caso);
+        const vector<EntradaCatalogo>& catalogo = catalogo_semillas(caso);
         const vector<vector<ldouble>>& legado = precargadas_del_prototipo();
+        const vector<vector<ldouble>>& genericos = bloques_genericos();
 
         for (const int dimension : dimensiones) {
             // Semilla distinta por (caso, dimension): el test no depende de
@@ -338,7 +413,8 @@ static void test_warm_start_inyecta_el_catalogo_del_caso() {
 
             const string etiqueta = "caso " + std::to_string(caso) +
                                     " dim " + std::to_string(dimension) + ": ";
-            check_int(etiqueta + "inyecta las diez semillas del catalogo completo",
+            check_int(etiqueta + "inyecta las " + std::to_string(TOTAL_CATALOGO) +
+                          " semillas del catalogo completo",
                       sembradas, static_cast<int>(TOTAL_CATALOGO));
             check_bool(etiqueta + "conserva el tamano de la poblacion",
                        poblacion.size() == POBLACION_CATALOGO_COMPLETO);
@@ -347,7 +423,7 @@ static void test_warm_start_inyecta_el_catalogo_del_caso() {
             // y rellenas con constantes 1 hasta la dimension configurada.
             bool bases_al_frente = true;
             for (size_t i = 0; i < NUM_BASES_POR_CASO && i < catalogo.size(); i++) {
-                vector<ldouble> esperada = catalogo[i];
+                vector<ldouble> esperada = catalogo[i].get();
                 esperada.resize(dimension, TOKEN_CONST1);
                 if (poblacion[i].vecvalue() != esperada) bases_al_frente = false;
             }
@@ -371,16 +447,35 @@ static void test_warm_start_inyecta_el_catalogo_del_caso() {
             check_bool(etiqueta + "las cinco precargadas ocupan los indices 5-9",
                        precargadas_despues);
 
+            // Los genericos ocupan los indices 10-24, tambien en orden y con
+            // el mismo relleno. Se comparan contra los bloques genericos
+            // compartidos para verificar que el tramo generico sea correcto.
+            bool genericos_despues = true;
+            for (size_t i = 0;
+                 i < genericos.size() && NUM_BASES_POR_CASO + NUM_PRECARGADAS + i < poblacion.size();
+                 i++) {
+                vector<ldouble> esperada = genericos[i];
+                esperada.resize(dimension, TOKEN_CONST1);
+                if (poblacion[NUM_BASES_POR_CASO + NUM_PRECARGADAS + i].vecvalue() != esperada) {
+                    genericos_despues = false;
+                }
+            }
+            check_bool(etiqueta + "los " +
+                           std::to_string(NUM_BLOQUES_GENERICOS) +
+                           " genericos ocupan los indices 10-24",
+                       genericos_despues);
+
             // Las semillas inyectadas deben renderizar como expresiones
             // prefijas completas (sin huecos de aridad). En Python seria
-            // `assert all("()" not in repr(p) for p in poblacion[:10])`.
+            // `assert all("()" not in repr(p) for p in poblacion[:25])`.
             bool completas = true;
             for (size_t i = 0; i < TOTAL_CATALOGO && i < poblacion.size(); i++) {
                 if (poblacion[i].represant().find("()") != string::npos) {
                     completas = false;
                 }
             }
-            check_bool(etiqueta + "las diez semillas inyectadas renderizan completas",
+            check_bool(etiqueta + "las " + std::to_string(TOTAL_CATALOGO) +
+                           " semillas inyectadas renderizan completas",
                        completas);
         }
 
@@ -433,29 +528,41 @@ static void test_warm_start_inyecta_el_catalogo_del_caso() {
 // -------------------------------------------------------------------------
 // Slice 4d (issue #146): la cuota de inyeccion es
 // min(ceil(0.05 * poblacion), tamano del catalogo). Con el catalogo actual
-// de 10 entradas las poblaciones grandes se topan con el tamano del
-// catalogo; los ejemplos "pop=300 -> 15" del issue corresponden a la cuota
-// sin tope, el catalogo de 25 entradas que completa #145.
+// de 25 entradas la cuota llega al tope con pop=500; las comprobaciones con
+// tope diez conservan el escenario historico del issue #146 (catalogo de
+// diez entradas) para verificar que el tope se aplica.
 // -------------------------------------------------------------------------
 
 static void test_cuota_semillas() {
-    // Poblaciones del issue #146 contra el catalogo actual de 10 entradas.
-    check_int("cuota pop=4: ceil(0.05*4)=1", cuota_semillas(4, 10), 1);
-    check_int("cuota pop=100: ceil(0.05*100)=5", cuota_semillas(100, 10), 5);
-    check_int("cuota pop=200: ceil(0.05*200)=10", cuota_semillas(200, 10), 10);
-    check_int("cuota pop=300 con catalogo de 10: tope 10",
-              cuota_semillas(300, 10), 10);
-    check_int("cuota pop=500 con catalogo de 10: tope 10",
-              cuota_semillas(500, 10), 10);
-    check_int("cuota pop=800 con catalogo de 10: tope 10",
-              cuota_semillas(800, 10), 10);
+    // Escenario historico del issue #146: tope con un catalogo de diez
+    // entradas. En Python serian `CATALOGO_HISTORICO = 10` y
+    // `CATALOGO_ACTUAL = len(CATALOGO)`.
+    constexpr int CATALOGO_HISTORICO = 10;
+    constexpr int CATALOGO_ACTUAL = static_cast<int>(TOTAL_CATALOGO);
 
-    // Sin tope (catalogo de 25, el objetivo final tras #145) la cuota es el
-    // ceil puro, los ejemplos del issue: pop=300 -> 15 y pop>=500 -> 25.
-    check_int("cuota pop=300 sin tope: 15", cuota_semillas(300, 25), 15);
-    check_int("cuota pop=500 sin tope: 25", cuota_semillas(500, 25), 25);
-    check_int("cuota pop=800 con catalogo de 25: tope 25",
-              cuota_semillas(800, 25), 25);
+    // Poblaciones del issue #146 contra el catalogo historico de diez.
+    check_int("cuota pop=4: ceil(0.05*4)=1", cuota_semillas(4, CATALOGO_HISTORICO), 1);
+    check_int("cuota pop=100: ceil(0.05*100)=5",
+              cuota_semillas(100, CATALOGO_HISTORICO), 5);
+    check_int("cuota pop=200: ceil(0.05*200)=10",
+              cuota_semillas(200, CATALOGO_HISTORICO), 10);
+    check_int("cuota pop=300 con catalogo de " +
+                  std::to_string(CATALOGO_HISTORICO) + ": tope 10",
+              cuota_semillas(300, CATALOGO_HISTORICO), CATALOGO_HISTORICO);
+    check_int("cuota pop=500 con catalogo de " +
+                  std::to_string(CATALOGO_HISTORICO) + ": tope 10",
+              cuota_semillas(500, CATALOGO_HISTORICO), CATALOGO_HISTORICO);
+    check_int("cuota pop=800 con catalogo de " +
+                  std::to_string(CATALOGO_HISTORICO) + ": tope 10",
+              cuota_semillas(800, CATALOGO_HISTORICO), CATALOGO_HISTORICO);
+
+    // Con el catalogo actual de 25 la cuota es el ceil puro: pop=300 -> 15
+    // y pop>=500 -> 25.
+    check_int("cuota pop=300 sin tope: 15", cuota_semillas(300, CATALOGO_ACTUAL), 15);
+    check_int("cuota pop=500 sin tope: 25",
+              cuota_semillas(500, CATALOGO_ACTUAL), CATALOGO_ACTUAL);
+    check_int("cuota pop=800 con catalogo actual: tope 25",
+              cuota_semillas(800, CATALOGO_ACTUAL), CATALOGO_ACTUAL);
 }
 
 static void test_warm_start_cuota_del_5_por_ciento() {
@@ -999,6 +1106,7 @@ int main() {
     test_createPopulation_respeta_la_dimension();
     test_warm_start_opt_in();
     test_catalogo_semillas_por_caso();
+    test_genericos_compartidos_entre_casos();
     test_warm_start_inyecta_el_catalogo_del_caso();
     test_cuota_semillas();
     test_warm_start_cuota_del_5_por_ciento();

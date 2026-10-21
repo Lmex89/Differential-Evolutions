@@ -169,7 +169,7 @@ with `λ₁ = λ₂ = 10` (paper §5), squared residuals and penalties, and `f =
 
 Single-population DE/rand/1/bin:
 
-1. Initialise 100 random individuals of 20 tokens each — the population, dimension and generation limit default to the paper's Case 1 configuration (`ODE_POP`, `ODE_DIM` and `ODE_GEN` override them). `ODE_WARM_START=1` injects the case's ten catalog expressions (five case bases followed by the five preloaded prototype seeds) at the front of the population, padded with constant-1 tokens to the configured dimension, instead of drawing those individuals at random
+1. Initialise 100 random individuals of 20 tokens each — the population, dimension and generation limit default to the paper's Case 1 configuration (`ODE_POP`, `ODE_DIM` and `ODE_GEN` override them). `ODE_WARM_START=1` injects the case's 25 catalog expressions (five case bases, five preloaded prototype seeds and 15 shared generic blocks) at the front of the population, padded with constant-1 tokens to the configured dimension, instead of drawing those individuals at random
 2. For each target individual: pick three distinct random individuals as base vectors, form the mutant `v = x_r1 + F*(x_r2 - x_r3)` (one random `F` in `[0,1]` per mutation), build the trial by binomial crossover with `Cr = 0.2` (one forced index always comes from the mutant), and keep the trial only if its fitness is lower than the target's (greedy one-to-one selection)
 3. Track the best individual of the generation
 4. Repeat until convergence (fitness < 1e-5) or the generation limit (5000 generations for Case 1, `ODE_GEN` override)
@@ -233,16 +233,18 @@ The search configuration defaults to the paper's Case 1 values —
 overridden with `ODE_POP`, `ODE_DIM`, and `ODE_GEN`. Values
 that are missing, non-numeric, or below their minimum (4 individuals, 1 token,
 1 generation) fall back to the default, the same rule `ODE_SEED` uses.
-`ODE_WARM_START=1` seeds the population with the case's ten catalog
-expressions: five case bases (the exact solution first) followed by the five
-preloaded prototype seeds. Each entry is a complete prefix expression that is
-padded with constant-1 tokens to `ODE_DIM`, so warm start works at any
-dimension; the startup line reports the effective configuration (`population=`,
-`dimension=`, `warm_start=`) plus `warm_seeds=`, the number of catalog entries
-injected. Injection is capped at `min(ceil(0.05 × population), catalog size)`
-(issue #146): the default population of 100 admits the five bases
-(`warm_seeds=5`) and `ODE_POP=200` the full ten (`warm_seeds=10`); entries
-longer than the dimension are skipped and do not consume quota.
+`ODE_WARM_START=1` seeds the population with the case's 25 catalog
+expressions: five case bases (the exact solution first), the five preloaded
+prototype seeds and 15 shared generic blocks. Each entry is a complete prefix
+expression that is padded with constant-1 tokens to `ODE_DIM`, so warm start
+works at any dimension; the startup line reports the effective configuration
+(`population=`, `dimension=`, `warm_start=`) plus `warm_seeds=`, the number of
+catalog entries injected. Injection is capped at
+`min(ceil(0.05 × population), catalog size)` (issue #146): the default
+population of 100 admits the five bases (`warm_seeds=5`), `ODE_POP=200` the
+first ten (`warm_seeds=10`), `ODE_POP=300` the first fifteen
+(`warm_seeds=15`), and `ODE_POP=500` the full twenty-five (`warm_seeds=25`);
+entries longer than the dimension are skipped and do not consume quota.
 
 Stagnation restarts are controlled by `ODE_STALE_LIMIT` (default 500
 generations without a new best) and `ODE_RESTART_FRACTION` (default 0.8, the
@@ -385,7 +387,7 @@ mode.
 ## Caveats
 
 - Search is stochastic by default (`srand(time(NULL))`); set `ODE_SEED=N` for reproducible runs, `ODE_CASE=1` for the paper's Case 1 and `ODE_CASE=2` for the hyperbolic case
-- Search defaults use 100 individuals, dimension 20, and 5,000 generations; `ODE_POP`, `ODE_DIM` and `ODE_GEN` override them, and `ODE_WARM_START=1` injects the case's ten catalog seeds (five bases + five preloaded) padded to the configured dimension
+- Search defaults use 100 individuals, dimension 20, and 5,000 generations; `ODE_POP`, `ODE_DIM` and `ODE_GEN` override them, and `ODE_WARM_START=1` injects the case's 25 catalog seeds (five bases + five preloaded + 15 generic) padded to the configured dimension
 - No CI; dual-number, seed, mutation, crossover, population/configuration, restart-escalation, grid, token-alphabet, FunbObj const-correctness and header hygiene tests run with `ctest --test-dir build`
 - Code comments are in Spanish
 - `dualfunctions.h` requires STL headers (`vector`, `string`) to be included before it

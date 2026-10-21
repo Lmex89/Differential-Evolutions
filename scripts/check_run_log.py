@@ -22,10 +22,10 @@ deterministicas (ODE_SEED=42, ODE_CASE=1):
    (poblacion 100, fracciones 0.80/0.40): el checker aisla ODE_POP y las
    fracciones del entorno.
 6. La cabecera de_run_start informa el warm start real (issues #144/#146):
-   con ODE_WARM_START=1 y ODE_POP=200 la cuota ceil(0.05*200)=10 inyecta el
-   catalogo completo y la cabecera debe reportar warm_start=1 y
-   warm_seeds=10. Es la via publica del contrato de #144; los tests C++ solo
-   cubren el retorno de createPopulation.
+   con ODE_WARM_START=1 y ODE_POP=200 la cuota ceil(0.05*200)=10 inyecta las
+   primeras diez entradas del catalogo (de 25) y la cabecera debe reportar
+   warm_start=1 y warm_seeds=10. Es la via publica del contrato de #144; los
+   tests C++ solo cubren el retorno de createPopulation.
 
 En Python seria el equivalente a un test de integracion de pytest que ejecuta
 el entry point como subproceso y valida su stdout.
@@ -156,8 +156,9 @@ def errores_del_log(lineas, modo_esperado, reinicio_esperado, warm_esperado=None
                     )
 
     # 6. La cabecera informa el warm start real (issues #144/#146): con
-    # ODE_WARM_START=1 y ODE_POP=200 la cuota ceil(0.05*200)=10 inyecta el
-    # catalogo completo y debe reportar warm_start=1 y warm_seeds=10.
+    # ODE_WARM_START=1 y ODE_POP=200 la cuota ceil(0.05*200)=10 inyecta las
+    # primeras diez entradas del catalogo de 25 y debe reportar warm_start=1
+    # y warm_seeds=10.
     if warm_esperado is not None and cabecera is not None:
         warm_start, warm_seeds = warm_esperado
         for campo in (f"warm_start={warm_start}", f"warm_seeds={warm_seeds}"):
@@ -176,7 +177,7 @@ def main():
     # modo en la cabecera y las cifras del reinicio en la linea restart |:
     # legacy conserva su fraccion 0.80 y adaptive usa el primer escalon de la
     # escalera (0.40). La caliente debe informar warm_start=1 y warm_seeds=10
-    # (la cuota ceil(0.05*200)=10 del issue #146).
+    # (la cuota ceil(0.05*200)=10 del issue #146, primeras diez de 25).
     errores = []
     reinicio_env = {"ODE_STALE_LIMIT": "1", "ODE_GEN": "2"}
     warm_env = {"ODE_WARM_START": "1", "ODE_POP": "200"}
