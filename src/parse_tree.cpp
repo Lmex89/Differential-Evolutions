@@ -13,293 +13,12 @@
 #include <sstream>
 #include <iomanip>
 #include "dualfunctions.h"
+#include "funbobj.h"
 #include "semilla.h"
 #include "salida.h"
 #include "token.h"
 
 using namespace std;
-typedef  long double ldouble;
-typedef string  str;
-
-// x_rango: construye la rejilla de evaluacion como `npoints` puntos igualmente
-// espaciados en [start, stop], ambos extremos incluidos. Antes el tercer
-// parametro era un paso y el conteo salia de una division truncada
-// (`int final = stop/step`): con paso 0.1 ese truncamiento daba 11 puntos en
-// vez de los 100 que pide el paper (REVIEW C1). Ahora el conteo es explicito y
-// cada punto se calcula con x_i = start + (stop-start)*i/(npoints-1), que en
-// Python seria:
-//     [start + (stop - start) * i / (npoints - 1) for i in range(npoints)]
-// Cada punto se empaqueta como el 2dual [x, 1, 0] (eq. (14) del paper): x con
-// dx/dx = 1 y d2x/dx2 = 0, la convencion que espera parsv().
-vector<vector<long double>> x_rango(long double start,long double stop,int npoints){
-
-    // Precondicion: npoints >= 2 para evitar division por cero en (npoints-1).
-    // Con npoints < 2, la formula x_i = start + (stop-start)*i/(npoints-1)
-    // divide por cero o genera un solo punto sin sentido. En Python seria
-    // `assert npoints >= 2, "grid requires at least 2 points"`.
-    assert(npoints >= 2);
-
-    vector<vector<long double>> ans;
-
-    for(int i = 0; i < npoints; i++){
-        long double pos = start + (stop - start) * i / (npoints - 1);
-        vector<long double> temp = {pos,1.0,0.0};
-        ans.push_back(temp);
-    }
-    return ans;
-}
-
-class FunbObj{
-
-    private:
-    vector<ldouble> _vecval;
-    string _repre;
-    // _fresult es mutable porque fitness() es const pero necesita cachear el
-    // resultado. En Python sería @cached_property: método const con estado interno.
-    mutable ldouble _fresult;
-    // Cache de la fitness ya calculada (B6 de REVIEW.md): los individuos se
-    // reemplazan enteros en el bucle DE (`Population[j] = candidato`), nunca
-    // se mutan, así que el valor cacheado no puede quedar obsoleto. Es mutable
-    // porque fitness() es const pero debe poder actualizar la caché. En Python
-    // serían `self._cache_valido = False` y `self._fresult`.
-    mutable bool _cache_valido = false;
-    vector<vector<ldouble>> _xrange;
-    vector<long double> _xinitials = {0.0,1.0,0.0};
-    // Factor de integración Delta x de la suma de Riemann de la ec. (4):
-    // con los 100 puntos igualmente espaciados de [0,1] y ambos extremos
-    // incluidos, el paso es (stop-start)/(npoints-1) = 1/99. En Python sería
-    // `self._dx = (stop - start) / (len(self._xrange) - 1)`; long double no
-    // tiene equivalente exacto en Python (es más ancho que float).
-    long double _dx;
-    // Caso del problema que mide esta fitness (lo elige ODE_CASE en main()):
-    //   0 = juguete historico del prototipo: y'' + y = 0, y(0)=1, y'(0)=1
-    //   1 = Caso 1 del paper, ecuacion (18): x*y'' + y' - cos(x) = 0,
-    //       y(0)=0, y'(0)=1, con solucion exacta la integral del seno Si(x)
-    //   2 = caso hiperbolico (issue #61): y'' - y = 0, y(0)=1, y'(0)=0,
-    //       con solucion exacta cosh(x); la busqueda solo puede alcanzarlo
-    //       desde que existe TOKEN_COSH.
-    //   3 = oscilador amortiguado (issue #103): y'' + 2y' + 2y = 0,
-    //       y(0)=1, y'(0)=-1, solucion e^(-x)*cos(x)
-    //   4 = oscilador forzado (issue #103): y'' + y = e^x,
-    //       y(0)=0, y'(0)=0, solucion (e^x - cos(x) - sin(x))/2
-    //   5 = resonancia (issue #103): y'' - y = e^x,
-    //       y(0)=0, y'(0)=0, solucion (2x*e^x - e^x + e^(-x))/4
-    //   6..7 = casos Legendre/Hermite (issue #104): el parser ya los acepta
-    //       (issue #102) y las condiciones iniciales por caso (incluidas
-    //       y(0)=-1/2 de Legendre y y(0)=-2 de Hermite) se asignan en el
-    //       switch de fitness(); sus residuales llegan con esos tickets.
-    // Es el mismo patron que ODE_SEED: un numero de caso en vez de una bandera
-    // por problema. En Python seria `self._caso = caso`.
-    int _caso;
-
-    public:
-    // caso: selecciona la ODE que evalua fitness() (ver _caso). Tiene valor por
-    // defecto 0 para que el resto del programa y los tests que ya construian
-    // FunbObj con 3 argumentos sigan comportandose igual. En Python seria
-    // `def __init__(self, vecval, start, stop, caso=0)`.
-    // El constructor usa move semantics para el vector: std::move(vecval) evita
-    // copiar el vector dos veces (una en el parámetro, otra en el miembro).
-    // En Python no existe este detalle porque las listas siempre son referencias;
-    // en C++ el move evita el overhead de copiar el vector completo.
-    FunbObj(vector<ldouble> vecval,ldouble start,ldouble stop, int caso = 0)
-    : _vecval(std::move(vecval)), _caso(caso) {
-        // Rejilla de evaluacion: los 100 puntos igualmente espaciados de [0,1]
-        // que pide el paper (§5). En Python seria
-        // `self._xrange = x_rango(start, stop, 100)`.
-        _xrange = x_rango(start,stop,100);
-        _repre = parse_tree(_vecval);
-        _xrange[0] = _xinitials;
-        // Delta x de la suma de Riemann que aproxima integral(f^2 dx) en la
-        // ec. (4) del paper (seccion 5). x_rango siempre devuelve 100 puntos,
-        // asi que el divisor (npoints-1) nunca es cero.
-        _dx = (stop - start) / static_cast<long double>(_xrange.size() - 1);
-    }
-    // represant() es const porque no modifica el estado observable del objeto.
-    // En Python sería @property def represant(self): return self._repre.
-    string represant() const{
-        return _repre;
-    }
-    // vecvalue() es const porque solo devuelve una copia del vector interno.
-    // En Python sería @property def vecvalue(self): return self._vecval.copy().
-    vector<ldouble> vecvalue() const{
-        return _vecval;
-    }
-    // fitness() es const con caché mutable: el método es de solo lectura desde
-    // fuera, pero internamente puede actualizar _fresult y _cache_valido.
-    // En Python sería @cached_property: método const con estado interno cacheado.
-    long double fitness() const{	
-        // Cache por individuo: el bucle DE pide la fitness varias veces (la
-        // comparacion del trial contra el objetivo y, en el barrido del mejor
-        // de la generacion, dos por comparacion); recalcular la rejilla de 100
-        // puntos en cada llamada era trabajo repetido. En Python seria
-        // `if self._cache_valido: return self._fresult`.
-        if (_cache_valido) return _fresult;
-
-        ldouble res = 0 ;
-        string fun = parse_tree(_vecval);
-
-        std::size_t poss = fun.find("()");
-        if (poss !=std::string::npos){
-            _fresult  = INFINITY;
-            _cache_valido = true;
-            return _fresult ;
-            }
-    // La expresion debe depender de x: basta cualquier hoja x-dependiente (la
-    // variable x o las hojas polinomiales x^2/x^3 del issue #63), no solo el
-    // token 11. En Python seria
-    // `if not any(is_x_dependent(int(t)) for t in self._vecval):`.
-    bool depende_de_x = std::any_of(_vecval.begin(), _vecval.end(),
-                                    [](ldouble t){ return is_x_dependent(static_cast<int>(t)); });
-    if (!depende_de_x){
-        // Una expresion constante no es funcion de x: INFINITY sin tocar el
-        // vector. Antes se escribian 11s al azar y luego se devolvia INFINITY
-        // igual: la evaluacion mutaba al individuo y una segunda llamada
-        // podia devolver otra cosa (B6 de REVIEW.md). Los productores
-        // (vector_population, Mutation, Recombination) ya garantizan un token
-        // x, asi que aqui solo se penaliza.
-        _fresult  = INFINITY;
-        _cache_valido = true;
-        return _fresult ;
- }				
-    // Condicion inicial en x=0: [y(0), y'(0), y''(0)]. Antes se calculaba
-    // tambien `b_end` (la misma evaluacion en x=1) y nunca se usaba; se
-    // elimino (REVIEW C4, plan de correccion item 16).
-    vector<ldouble> a_start = parsv(_vecval,_xrange[0]);
-    // Cualquier componente NaN invalida el individuo completo. En Python seria
-    // `any(math.isnan(componente) for componente in a_start)`; no hay una
-    // conversion automatica de NaN a una excepcion en este codigo C++.
-    if (isnan(a_start[0]) || isnan(a_start[1]) || isnan(a_start[2])){
-        _fresult = INFINITY;
-        _cache_valido = true;
-        return _fresult;
-    }
-
-    // Hoist container size to avoid repeated casts in loop condition
-    const int xrange_size = static_cast<int>(_xrange.size());
-    for (int i = 0; i < xrange_size; i++){
-        vector<ldouble> fitnessval(parsv(_vecval,_xrange[i]));
-        //  cout << parse_tree(_vecval) << endl;
-            
-        //   cout << endl; cout << i << " " ;
-        // cout <<" <<<<<"  << endl;
-        // cin.get();
-
-        // Cualquier componente NaN hace que todo el individuo sea no evaluable.
-        // En Python equivale a `if any(math.isnan(c) for c in fitnessval):`
-        // seguido de `return math.inf`; asi no existe una penalizacion finita
-        // distinta para un punto sin informacion util.
-        if (isnan(fitnessval[0]) || isnan(fitnessval[1]) || isnan(fitnessval[2])){
-            _fresult = INFINITY;
-            _cache_valido = true;
-            return _fresult;
-        }
-
-        // Residuo de la ODE en el punto de la rejilla, elevado al cuadrado,
-        // segun el caso (ver _caso). En Python seria `res += r**2`; la ec. (4)
-        // del paper usa cuadrados, no potencias cuartas.
-        if (_caso == 1){
-            // Caso 1 del paper: x*y'' + y' - cos(x) = 0. Se evita
-            // dividir por x=0, que es el primer punto de la rejilla.
-            ldouble x = _xrange[i][0];
-            res +=pow(x*fitnessval[2] + fitnessval[1] - cos(x),2) ;
-        } else if (_caso == 2){
-            // Caso 2 (issue #61): y'' - y = 0, la ecuacion hiperbolica. En
-            // Python seria `res += (y2 - y)**2`.
-            res +=pow(fitnessval[2] - fitnessval[0],2) ;
-        } else if (_caso == 3){
-            // Caso 3 (issue #103): oscilador amortiguado y'' + 2y' + 2y = 0.
-            // En Python seria `res += (y2 + 2*y1 + 2*y0)**2`.
-            res +=pow(fitnessval[2] + 2.0L*fitnessval[1] + 2.0L*fitnessval[0],2) ;
-        } else if (_caso == 4){
-            // Caso 4 (issue #103): oscilador forzado y'' + y = eˣ.
-            // En Python seria `res += (y2 + y0 - exp(x))**2`.
-            ldouble x = _xrange[i][0];
-            res +=pow(fitnessval[2] + fitnessval[0] - exp(x),2) ;
-        } else if (_caso == 5){
-            // Caso 5 (issue #103): resonancia y'' - y = eˣ.
-            // En Python seria `res += (y2 - y0 - exp(x))**2`.
-            ldouble x = _xrange[i][0];
-            res +=pow(fitnessval[2] - fitnessval[0] - exp(x),2) ;
-        } else if (_caso == 6){
-            // Caso 6 (issue #104): Legendre (1-x²)y'' - 2xy' + 6y = 0.
-            // Primer caso con coeficientes variables: el residual usa x del
-            // punto de la rejilla (_xrange[i][0]). En Python seria
-            // `res += ((1 - x**2)*y2 - 2*x*y1 + 6*y0)**2`.
-            ldouble x = _xrange[i][0];
-            res +=pow((1.0L - x*x)*fitnessval[2] - 2.0L*x*fitnessval[1] + 6.0L*fitnessval[0],2) ;
-        } else if (_caso == 7){
-            // Caso 7 (issue #104): Hermite y'' - 2xy' + 4y = 0.
-            // Segundo caso con coeficientes variables. En Python seria
-            // `res += (y2 - 2*x*y1 + 4*y0)**2`.
-            ldouble x = _xrange[i][0];
-            res +=pow(fitnessval[2] - 2.0L*x*fitnessval[1] + 4.0L*fitnessval[0],2) ;
-        } else {
-            // Caso 0 (juguete del prototipo): y'' + y = 0.
-            res +=pow(fitnessval[2] + fitnessval[0],2) ;
-        }
-        }
-            // Integral de la ec. (4): los residuos al cuadrado suman una suma
-            // de Riemann y el factor Delta x la convierte en la aproximacion
-            // de integral(f^2 dx). Las penalizaciones de abajo quedan FUERA
-            // de la integral. En Python seria `res *= self._dx`.
-            res *= _dx;
-            // Condiciones iniciales del caso, como terminos lambda*h^2 de la
-            // ec. (4). El paper fija lambda1 = lambda2 = 10 (seccion 5) y h al
-            // cuadrado; antes se usaban pesos 300/700 y potencias cuartas.
-            // Issue #102: el switch reemplaza los ternarios que solo
-            // distinguian 0.0L/1.0L para que cada caso declare valores
-            // arbitrarios (fraccionarios como -1/2 o negativos como -2). En
-            // Python seria `y0_objetivo, dy0_objetivo = IC_POR_CASO[self._caso]`,
-            // con los valores por defecto del caso 0 si el caso no esta.
-            ldouble y0_objetivo  = 1.0L;   // caso 0: y(0)=1 (solucion cos+sin)
-            ldouble dy0_objetivo = 1.0L;   // caso 0: y'(0)=1
-            switch (_caso){
-                case 1:   // paper, ec. (18): x*y'' + y' - cos(x) = 0
-                    y0_objetivo  = 0.0L;
-                    dy0_objetivo = 1.0L;
-                    break;
-                case 2:   // hiperbolico (issue #61): y'' - y = 0 => cosh(x)
-                    y0_objetivo  = 1.0L;
-                    dy0_objetivo = 0.0L;
-                    break;
-                case 3:   // oscilador amortiguado (issue #103): y'' + 2y' + 2y = 0
-                    y0_objetivo  = 1.0L;
-                    dy0_objetivo = -1.0L;
-                    break;
-                case 4:   // oscilador forzado (issue #103): y'' + y = eˣ
-                    y0_objetivo  = 0.0L;
-                    dy0_objetivo = 0.0L;
-                    break;
-                case 5:   // resonancia (issue #103): y'' - y = eˣ
-                    y0_objetivo  = 0.0L;
-                    dy0_objetivo = 0.0L;
-                    break;
-                case 6:   // Legendre (issue #104): y(0) = -1/2, y'(0) = 0
-                    y0_objetivo  = -0.5L;
-                    dy0_objetivo = 0.0L;
-                    break;
-                case 7:   // Hermite (issue #104): y(0) = -2, y'(0) = 0
-                    y0_objetivo  = -2.0L;
-                    dy0_objetivo = 0.0L;
-                    break;
-                default:  // caso 0: conserva (1,1)
-                    break;
-            }
-            res +=10*pow((a_start[0] - y0_objetivo),2) + 10*pow((a_start[1] - dy0_objetivo),2);
-        // cout << "imprimimos res " << endl;
-        // cout << res << endl;
-        // cin.get();
-    if (isnan(res)){
-        _fresult = INFINITY;
-        _cache_valido = true;
-        return _fresult;
-    }
-    _fresult = res;
-    _cache_valido = true;
-    return _fresult;
-    }
-
-};
 
 // ---------------------------------------------------------------------------
 // Configuracion de la busqueda (issue #28).
@@ -868,14 +587,47 @@ int cuota_semillas(int poblacion, int tamano_catalogo){
     return std::min(sin_tope, tamano_catalogo);
 }
 
+// semilla_valida (issue #147): predicado que decide si una entrada del
+// catalogo puede inyectarse como individuo. Debe caber en la dimension (si no,
+// no se puede rellenar sin truncar el arbol), renderizar sin huecos, contener
+// al menos una hoja x-dependiente y tener fitness finita para el caso activo.
+// En Python seria:
+//     def semilla_valida(entrada, dimension, caso):
+//         if len(entrada) > dimension: return False
+//         semilla = entrada + [TOKEN_CONST1] * (dimension - len(entrada))
+//         individuo = FunbObj(semilla, 0, 1, caso)
+//         return ("()" not in individuo.represant()
+//                 and any(is_x_dependent(t) for t in semilla)
+//                 and math.isfinite(individuo.fitness()))
+bool semilla_valida(const vector<ldouble>& entrada, int dimension, int caso){
+    if (static_cast<int>(entrada.size()) > dimension) return false;
+
+    vector<ldouble> semilla = entrada;
+    semilla.resize(dimension, TOKEN_CONST1);
+
+    const bool depende_de_x = std::any_of(
+        semilla.begin(), semilla.end(),
+        [](ldouble token){ return is_x_dependent(static_cast<int>(token)); });
+    if (!depende_de_x) return false;
+
+    FunbObj individuo(std::move(semilla), 0, 1, caso);
+    return individuo.represant().find("()") == string::npos &&
+           std::isfinite(individuo.fitness());
+}
+
 // createPopulation: llena `Population` (que entra vacia) con exactamente
 // config.poblacion individuos de config.dimension tokens. Es la inicializacion
 // del paper: aleatoria uniforme (ecuacion (6)) salvo las entradas del catalogo
 // warm start, que solo entran con la bandera activa. Devuelve cuantas entradas
-// del catalogo se inyectaron de verdad (el `warm_seeds=` del log). En Python
-// seria `poblacion += [FunbObj(vector_population(dim), 0, 1, caso) for _ in
-// range(n)]` mas el tramo de semillas.
-int createPopulation(vector<FunbObj>& Population, const ConfigBusqueda& config, int caso){
+// del catalogo se inyectaron de verdad (el `warm_seeds=` del log).
+//
+// La variante con catalogo explicito permite probar la garantia de runtime con
+// entradas sinteticas (issue #147) sin tocar el catalogo real; main() usa la
+// sobrecarga de tres argumentos, que pasa `catalogo_semillas(caso)`. En Python
+// seria `createPopulation(poblacion, config, caso, CATALOGO.get(caso, []))`
+// con un parametro opcional.
+int createPopulation(vector<FunbObj>& Population, const ConfigBusqueda& config,
+                     int caso, const vector<EntradaCatalogo>& catalogo){
 
     // Precondiciones del inicializador de poblacion:
     // 1. La poblacion entra vacia y se llena con push_back (en Python seria
@@ -891,33 +643,39 @@ int createPopulation(vector<FunbObj>& Population, const ConfigBusqueda& config, 
     // minima; se rellena con constantes 1 hasta la dimension configurada. El
     // relleno final no altera la evaluacion porque el interprete consume el
     // arbol desde el inicio y las hojas sobrantes no participan (mismo patron
-    // que las semillas historicas). Una entrada mas larga que la dimension se
-    // omite (no se puede recortar sin romper el arbol) y no consume cuota.
-    // La cuota del 5% (issue #146) topa la inyeccion en
-    // min(ceil(0.05 * poblacion), tamano del catalogo): con pop=100 entran
-    // las cinco bases, con pop=200 las diez primeras, con pop=300 las quince
-    // primeras y con pop=500 el catalogo completo de 25 entradas
-    // (warm_seeds=25).
+    // que las semillas historicas).
+    //
+    // La garantia de runtime (issue #147) valida cada intento antes de
+    // conservarlo: `semilla_valida` exige que la entrada quepa en la dimension,
+    // renderice sin huecos, dependa de x y tenga fitness finita para el caso.
+    // Un intento rechazado no se inyecta: su lugar lo ocupa un individuo
+    // uniforme para que la poblacion conserve exactamente config.poblacion.
+    // La cuota del 5% (issue #146) cuenta INTENTOS, no semillas aceptadas:
+    // min(ceil(0.05 * poblacion), tamano del catalogo). Asi una entrada rota
+    // no permite que una entrada posterior fuera de la cuota se cuele en el
+    // censo; `semillas_inyectadas` solo cuenta las validas.
     int semillas_inyectadas = 0;
     if (config.warm_start){
-        const vector<EntradaCatalogo>& catalogo = catalogo_semillas(caso);
         const int cuota = cuota_semillas(config.poblacion,
                                          static_cast<int>(catalogo.size()));
         for (size_t i = 0;
              i < catalogo.size() &&
-             static_cast<int>(Population.size()) < config.poblacion &&
-             semillas_inyectadas < cuota;
+             static_cast<int>(i) < cuota &&
+             static_cast<int>(Population.size()) < config.poblacion;
              i++){
             const vector<ldouble>& entrada = catalogo[i].get();
-            if (static_cast<int>(entrada.size()) > config.dimension) continue;
-
-            vector<ldouble> semilla = entrada;
-            semilla.resize(config.dimension, TOKEN_CONST1);
-            // `caso` se propaga a cada FunbObj: los tokens no cambian entre
-            // casos, solo la ODE que mide fitness(). En Python seria
-            // `FunbObj(semilla, 0, 1, caso)`.
-            Population.push_back(FunbObj(std::move(semilla), 0, 1, caso));
-            semillas_inyectadas++;
+            if (semilla_valida(entrada, config.dimension, caso)){
+                vector<ldouble> semilla = entrada;
+                semilla.resize(config.dimension, TOKEN_CONST1);
+                // `caso` se propaga a cada FunbObj: los tokens no cambian
+                // entre casos, solo la ODE que mide fitness(). En Python seria
+                // `FunbObj(semilla, 0, 1, caso)`.
+                Population.push_back(FunbObj(std::move(semilla), 0, 1, caso));
+                semillas_inyectadas++;
+            } else {
+                Population.push_back(
+                    FunbObj(vector_population(config.dimension), 0, 1, caso));
+            }
         }
     }
 
@@ -929,6 +687,12 @@ int createPopulation(vector<FunbObj>& Population, const ConfigBusqueda& config, 
     }
 
     return semillas_inyectadas;
+}
+
+// Sobrecarga de produccion: inyecta el catalogo del caso. En Python seria el
+// valor por defecto `catalogo=None` resuelto a `CATALOGO.get(caso, [])`.
+int createPopulation(vector<FunbObj>& Population, const ConfigBusqueda& config, int caso){
+    return createPopulation(Population, config, caso, catalogo_semillas(caso));
 }
 
 // ResumenDiversidad: resultado puro de mirar las fitness de una generacion.

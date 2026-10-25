@@ -245,6 +245,46 @@ static void validar_catalogo(const vector<EntradaCatalogo>& catalogo, int caso) 
     check_bool(etiqueta + "las bases tienen fitness finita", bases_finitas);
 }
 
+// -------------------------------------------------------------------------
+// Slice 4e (issue #147): una entrada del catalogo solo se inyecta si cabe en
+// la dimension, renderiza sin huecos, depende de x y tiene fitness finita.
+// -------------------------------------------------------------------------
+
+static void test_semilla_valida() {
+    const int caso = 0;
+    const int dimension = 20;
+
+    // La base exacta del caso 0 (cos(x) + sin(x)) es el caso positivo.
+    const vector<ldouble> valida = {
+        TOKEN_ADD, TOKEN_COS, TOKEN_X, TOKEN_SIN, TOKEN_X};
+    check_bool("semilla_valida acepta una base exacta",
+               semilla_valida(valida, dimension, caso));
+
+    // Expresion completa pero constante: no depende de x, asi que fitness()
+    // la penaliza con INFINITY.
+    const vector<ldouble> constante = {
+        TOKEN_ADD, TOKEN_CONST1, TOKEN_CONST2};
+    check_bool("semilla_valida rechaza una expresion constante",
+               !semilla_valida(constante, dimension, caso));
+
+    // Expresion incompleta: ADD solo tiene un operando y deja un hueco "()".
+    const vector<ldouble> incompleta = {TOKEN_ADD, TOKEN_CONST1};
+    check_bool("semilla_valida rechaza una expresion con huecos",
+               !semilla_valida(incompleta, dimension, caso));
+
+    // 1/x en x=0 produce un valor no finito; el resto de la expresion esta
+    // bien formada y depende de x, asi que solo falla la fitness.
+    const vector<ldouble> no_finita = {
+        TOKEN_DIV, TOKEN_CONST1, TOKEN_X};
+    check_bool("semilla_valida rechaza una fitness no finita",
+               !semilla_valida(no_finita, dimension, caso));
+
+    // La entrada mide tres tokens: no cabe en una dimension de dos.
+    const vector<ldouble> larga = {TOKEN_ADD, TOKEN_X, TOKEN_X};
+    check_bool("semilla_valida rechaza una entrada mas larga que la dimension",
+               !semilla_valida(larga, 2, caso));
+}
+
 static void test_catalogo_semillas_por_caso() {
     const std::array<int, 8> casos = {0, 1, 2, 3, 4, 5, 6, 7};
 
@@ -389,9 +429,14 @@ static void test_warm_start_inyecta_el_catalogo_del_caso() {
     const std::array<int, 3> dimensiones = {20, 25, 30};
     // El issue #145 completa el catalogo a 25 entradas (5 bases + 5 precargadas
     // + 15 genericos). Con pop=500, la cuota del 5% es ceil(0.05*500)=25, lo
-    // que permite inyectar el catalogo completo y la cabecera debe reportar
-    // warm_seeds=25.
+    // que permite intentar el catalogo completo. El issue #147 rechaza dos
+    // precargadas (indices 5 y 6): empiezan con SQRT(X) y su derivada no es
+    // finita en x=0, asi que su fitness es INFINITY. El resto (23) se inyecta
+    // y la cabecera debe reportar warm_seeds=23.
     constexpr int POBLACION_CATALOGO_COMPLETO = 500;
+    constexpr int PRIMER_PRECARGADA_RECHAZADA = NUM_BASES_POR_CASO;
+    constexpr int ULTIMA_PRECARGADA_RECHAZADA = NUM_BASES_POR_CASO + 1;
+    constexpr int SEMILLAS_VALIDAS = TOTAL_CATALOGO - 2;
 
     for (const int caso : casos) {
         const vector<EntradaCatalogo>& catalogo = catalogo_semillas(caso);
@@ -413,9 +458,9 @@ static void test_warm_start_inyecta_el_catalogo_del_caso() {
 
             const string etiqueta = "caso " + std::to_string(caso) +
                                     " dim " + std::to_string(dimension) + ": ";
-            check_int(etiqueta + "inyecta las " + std::to_string(TOTAL_CATALOGO) +
-                          " semillas del catalogo completo",
-                      sembradas, static_cast<int>(TOTAL_CATALOGO));
+            check_int(etiqueta + "inyecta las " + std::to_string(SEMILLAS_VALIDAS) +
+                          " semillas validas del catalogo completo",
+                      sembradas, SEMILLAS_VALIDAS);
             check_bool(etiqueta + "conserva el tamano de la poblacion",
                        poblacion.size() == POBLACION_CATALOGO_COMPLETO);
 
@@ -440,11 +485,20 @@ static void test_warm_start_inyecta_el_catalogo_del_caso() {
                  i++) {
                 vector<ldouble> esperada = legado[i];
                 esperada.resize(dimension, TOKEN_CONST1);
-                if (poblacion[NUM_BASES_POR_CASO + i].vecvalue() != esperada) {
+                const vector<ldouble> obtenida =
+                    poblacion[NUM_BASES_POR_CASO + i].vecvalue();
+                const bool rechazada =
+                    NUM_BASES_POR_CASO + i == PRIMER_PRECARGADA_RECHAZADA ||
+                    NUM_BASES_POR_CASO + i == ULTIMA_PRECARGADA_RECHAZADA;
+                if (rechazada) {
+                    // El hueco lo ocupa un aleatorio, no la entrada rota.
+                    if (obtenida == esperada) precargadas_despues = false;
+                } else if (obtenida != esperada) {
                     precargadas_despues = false;
                 }
             }
-            check_bool(etiqueta + "las cinco precargadas ocupan los indices 5-9",
+            check_bool(etiqueta +
+                           "las precargadas validas conservan su indice y las rechazadas dejan un aleatorio",
                        precargadas_despues);
 
             // Los genericos ocupan los indices 10-24, tambien en orden y con
@@ -465,18 +519,34 @@ static void test_warm_start_inyecta_el_catalogo_del_caso() {
                            " genericos ocupan los indices 10-24",
                        genericos_despues);
 
-            // Las semillas inyectadas deben renderizar como expresiones
-            // prefijas completas (sin huecos de aridad). En Python seria
-            // `assert all("()" not in repr(p) for p in poblacion[:25])`.
-            bool completas = true;
+            // Las semillas realmente inyectadas (todas menos las dos
+            // precargadas rechazadas) deben pasar la garantia de runtime:
+            // sin huecos, x-dependientes y con fitness finita. Es una
+            // comprobacion de sanidad independiente de semilla_valida: usa
+            // solo la interfaz publica de FunbObj. En Python seria
+            // `assert all("()" not in repr(p) and has_x(p) and
+            //             math.isfinite(p.fitness()) for p in poblacion[:25]
+            //             if indice not in (5, 6))`.
+            bool semillas_validas = true;
             for (size_t i = 0; i < TOTAL_CATALOGO && i < poblacion.size(); i++) {
-                if (poblacion[i].represant().find("()") != string::npos) {
-                    completas = false;
+                if (i == PRIMER_PRECARGADA_RECHAZADA ||
+                    i == ULTIMA_PRECARGADA_RECHAZADA) {
+                    continue;
+                }
+                const vector<ldouble> genes = poblacion[i].vecvalue();
+                const bool tiene_x = std::any_of(
+                    genes.begin(), genes.end(),
+                    [](ldouble token){
+                        return is_x_dependent(static_cast<int>(token));
+                    });
+                if (poblacion[i].represant().find("()") != string::npos ||
+                    !tiene_x || !std::isfinite(poblacion[i].fitness())) {
+                    semillas_validas = false;
                 }
             }
-            check_bool(etiqueta + "las " + std::to_string(TOTAL_CATALOGO) +
-                           " semillas inyectadas renderizan completas",
-                       completas);
+            check_bool(etiqueta + "las " + std::to_string(SEMILLAS_VALIDAS) +
+                           " semillas inyectadas pasan la validacion de runtime",
+                       semillas_validas);
         }
 
     }
@@ -526,6 +596,126 @@ static void test_warm_start_inyecta_el_catalogo_del_caso() {
 }
 
 // -------------------------------------------------------------------------
+// Slice 4f (issue #147): una entrada invalida no se inyecta; su lugar lo ocupa
+// un individuo uniforme y la cuota cuenta intentos, no semillas aceptadas.
+// -------------------------------------------------------------------------
+
+static void test_warm_start_rellena_huecos_con_aleatorios() {
+    // Catalogo sintetico de seis entradas con cuota cinco (pop=100). La
+    // posicion 1 es constante (sin x), la 2 tiene un hueco y la 5 queda fuera
+    // de la cuota aunque sea valida.
+    const vector<vector<ldouble>> entradas = {
+        {TOKEN_ADD, TOKEN_COS, TOKEN_X, TOKEN_SIN, TOKEN_X},  // 0 valida
+        {TOKEN_ADD, TOKEN_CONST1, TOKEN_CONST2},              // 1 constante
+        {TOKEN_ADD, TOKEN_CONST1},                            // 2 hueco
+        {TOKEN_X},                                            // 3 valida
+        {TOKEN_COS, TOKEN_X},                                 // 4 valida
+        {TOKEN_SIN, TOKEN_X}                                  // 5 fuera de cuota
+    };
+    vector<EntradaCatalogo> catalogo;
+    catalogo.reserve(entradas.size());
+    for (const auto& entrada : entradas) catalogo.emplace_back(entrada);
+
+    ConfigBusqueda config;
+    config.poblacion = 100;
+    config.dimension = 20;
+    config.warm_start = true;
+
+    srand(20261027);
+    vector<FunbObj> poblacion;
+    const int sembradas = createPopulation(poblacion, config, 0, catalogo);
+
+    check_int("el catalogo sintetico inyecta solo las 3 semillas validas",
+              sembradas, 3);
+    check_bool("el relleno aleatorio conserva el tamano de la poblacion",
+               poblacion.size() == 100);
+
+    // En Python seria `padded = entrada + [TOKEN_CONST1] * (20 - len(entrada))`.
+    auto rellenada = [](const vector<ldouble>& entrada) {
+        vector<ldouble> esperada = entrada;
+        esperada.resize(20, TOKEN_CONST1);
+        return esperada;
+    };
+
+    check_bool("la entrada valida 0 conserva su lugar",
+               poblacion[0].vecvalue() == rellenada(entradas[0]));
+    check_bool("la entrada valida 3 conserva su lugar",
+               poblacion[3].vecvalue() == rellenada(entradas[3]));
+    check_bool("la entrada valida 4 conserva su lugar",
+               poblacion[4].vecvalue() == rellenada(entradas[4]));
+
+    // Los huecos 1 y 2 reciben un individuo uniforme: no son la entrada
+    // rechazada y dependen de x porque vector_population siempre fuerza una
+    // hoja x-dependiente. En Python seria
+    // `assert poblacion[i].vecvalue() != rellenada(entradas[i])`.
+    bool huecos_rellenos = true;
+    for (const int i : {1, 2}) {
+        if (poblacion[i].vecvalue() == rellenada(entradas[i])) {
+            huecos_rellenos = false;
+        }
+        const vector<ldouble> genes = poblacion[i].vecvalue();
+        const bool tiene_x = std::any_of(
+            genes.begin(), genes.end(),
+            [](ldouble token){ return is_x_dependent(static_cast<int>(token)); });
+        if (!tiene_x) huecos_rellenos = false;
+    }
+    check_bool("las entradas rechazadas dejan un aleatorio en su lugar",
+               huecos_rellenos);
+
+    // La sexta entrada no se intenta: la cuota son cinco intentos, no cinco
+    // semillas aceptadas. Si la cuota contara solo las validas, la entrada 5
+    // entraria y `sembradas` seria 4.
+    check_bool("la sexta entrada queda fuera de la cuota",
+               poblacion[5].vecvalue() != rellenada(entradas[5]));
+}
+
+static void test_warm_start_omite_entradas_mas_largas_que_la_dimension() {
+    // Con dimension cinco, la entrada central mide seis tokens y no se puede
+    // rellenar sin truncar el arbol: se descarta y su lugar lo ocupa un
+    // aleatorio. La tercera mide exactamente cinco y si entra. En Python seria
+    // `assert createPopulation(..., dimension=5) == 2` con esta lista.
+    const vector<vector<ldouble>> entradas = {
+        {TOKEN_X},                                                // 1 token
+        {TOKEN_ADD, TOKEN_ADD, TOKEN_CONST1, TOKEN_X,
+         TOKEN_COS, TOKEN_X},                                     // 6 tokens
+        {TOKEN_ADD, TOKEN_ADD, TOKEN_CONST1, TOKEN_X, TOKEN_X}     // 5 tokens
+    };
+    vector<EntradaCatalogo> catalogo;
+    catalogo.reserve(entradas.size());
+    for (const auto& entrada : entradas) catalogo.emplace_back(entrada);
+
+    ConfigBusqueda config;
+    config.poblacion = 100;
+    config.dimension = 5;
+    config.warm_start = true;
+
+    srand(20261028);
+    vector<FunbObj> poblacion;
+    const int sembradas = createPopulation(poblacion, config, 0, catalogo);
+
+    check_int("una entrada mas larga que la dimension no se inyecta",
+              sembradas, 2);
+    check_bool("la entrada descartada conserva el tamano de la poblacion",
+               poblacion.size() == 100);
+    vector<ldouble> esperada_corta = entradas[0];
+    esperada_corta.resize(5, TOKEN_CONST1);
+    check_bool("la entrada de 1 token se inyecta rellenada a la dimension",
+               poblacion[0].vecvalue() == esperada_corta);
+    check_bool("la entrada de 5 tokens (dimension exacta) se inyecta",
+               poblacion[2].vecvalue() == entradas[2]);
+
+    // El hueco de la entrada descartada lo ocupa vector_population, que siempre
+    // fuerza una hoja x-dependiente. En Python seria
+    // `assert any(is_x_dependent(t) for t in poblacion[1].vecvalue())`.
+    const vector<ldouble> hueco = poblacion[1].vecvalue();
+    check_bool("la entrada descartada deja un aleatorio x-dependiente en su lugar",
+               std::any_of(hueco.begin(), hueco.end(),
+                           [](ldouble token){
+                               return is_x_dependent(static_cast<int>(token));
+                           }));
+}
+
+// -------------------------------------------------------------------------
 // Slice 4d (issue #146): la cuota de inyeccion es
 // min(ceil(0.05 * poblacion), tamano del catalogo). Con el catalogo actual
 // de 25 entradas la cuota llega al tope con pop=500; las comprobaciones con
@@ -565,31 +755,71 @@ static void test_cuota_semillas() {
               cuota_semillas(800, CATALOGO_ACTUAL), CATALOGO_ACTUAL);
 }
 
-static void test_warm_start_cuota_del_5_por_ciento() {
-    // Con pop=100 (el default del paper) la cuota es 5: entran solo las cinco
-    // bases y se restaura el warm_seeds=5 del comportamiento previo a #144.
-    // Con pop=4 entra una sola semilla (ceil(0.05*4)=1).
-    srand(20261025);
-    ConfigBusqueda config_100;
-    config_100.poblacion = 100;
-    config_100.dimension = 20;
-    config_100.warm_start = true;
-    vector<FunbObj> poblacion_100;
-    const int sembradas_100 = createPopulation(poblacion_100, config_100, 0);
-    check_int("pop=100: la cuota inyecta 5 semillas (warm_seeds=5 legacy)",
-              sembradas_100, 5);
-    check_bool("pop=100: la poblacion conserva su tamano",
-               poblacion_100.size() == 100);
+static void test_warm_start_cuota_por_poblacion() {
+    // La cuota del 5% se aplica en createPopulation (el seam de integracion),
+    // no solo en cuota_semillas: la tabla cubre los seis tamanos del issue
+    // #146. Los valores esperados son literales independientes, no el
+    // resultado de volver a llamar a cuota_semillas. Desde el issue #147 la
+    // cuota cuenta INTENTOS (entradas consideradas) y el valor devuelto
+    // cuenta solo las semillas validas: las precargadas 5 y 6 se rechazan por
+    // fitness no finita. En Python seria
+    // `for pop, intentos, validas in {4: (1, 1), 100: (5, 5),
+    // 200: (10, 8), 300: (15, 13), 500: (25, 23), 800: (25, 23)}.items(): ...`.
+    const std::array<int, 6> poblaciones = {4, 100, 200, 300, 500, 800};
+    const std::array<int, 6> intentos_esperados = {1, 5, 10, 15, 25, 25};
+    const std::array<int, 6> semillas_esperadas = {1, 5, 8, 13, 23, 23};
+    const vector<EntradaCatalogo>& catalogo = catalogo_semillas(0);
+    constexpr int PRIMER_PRECARGADA_RECHAZADA = NUM_BASES_POR_CASO;
+    constexpr int ULTIMA_PRECARGADA_RECHAZADA = NUM_BASES_POR_CASO + 1;
 
-    srand(20261026);
-    ConfigBusqueda config_4;
-    config_4.poblacion = 4;
-    config_4.dimension = 20;
-    config_4.warm_start = true;
-    vector<FunbObj> poblacion_4;
-    const int sembradas_4 = createPopulation(poblacion_4, config_4, 0);
-    check_int("pop=4: la cuota inyecta 1 semilla", sembradas_4, 1);
-    check_bool("pop=4: la poblacion conserva su tamano", poblacion_4.size() == 4);
+    for (size_t i = 0; i < poblaciones.size(); i++) {
+        const int poblacion = poblaciones[i];
+        const int intentos = intentos_esperados[i];
+        const int esperadas = semillas_esperadas[i];
+
+        // Semilla distinta por poblacion: el test no depende de que los
+        // sorteos aleatorios de la cola coincidan entre corridas.
+        srand(20261025 + poblacion);
+        ConfigBusqueda config;
+        config.poblacion = poblacion;
+        config.dimension = 20;
+        config.warm_start = true;
+
+        vector<FunbObj> individuos;
+        const int sembradas = createPopulation(individuos, config, 0);
+
+        const string etiqueta = "pop=" + std::to_string(poblacion) + ": ";
+        check_int(etiqueta + "la cuota inyecta " + std::to_string(esperadas) +
+                      " semillas validas",
+                  sembradas, esperadas);
+        check_bool(etiqueta + "la poblacion conserva su tamano",
+                   individuos.size() == static_cast<size_t>(poblacion));
+
+        // Las entradas validas conservan su indice y su relleno; las dos
+        // precargadas rechazadas dejan un aleatorio en el suyo. La cuenta se
+        // hace sobre los intentos, no sobre las semillas aceptadas. En Python
+        // seria `assert all(individuos[j] == padded(catalogo[j])
+        //                   for j in range(intentos) if j not in (5, 6))`.
+        bool lugares_correctos = true;
+        for (int j = 0; j < intentos && j < static_cast<int>(catalogo.size());
+             j++) {
+            vector<ldouble> esperada = catalogo[static_cast<size_t>(j)].get();
+            esperada.resize(20, TOKEN_CONST1);
+            const bool rechazada =
+                j == PRIMER_PRECARGADA_RECHAZADA ||
+                j == ULTIMA_PRECARGADA_RECHAZADA;
+            if (rechazada) {
+                if (individuos[static_cast<size_t>(j)].vecvalue() == esperada) {
+                    lugares_correctos = false;
+                }
+            } else if (individuos[static_cast<size_t>(j)].vecvalue() != esperada) {
+                lugares_correctos = false;
+            }
+        }
+        check_bool(etiqueta +
+                       "las entradas validas conservan su lugar y las rechazadas se rellenan",
+                   lugares_correctos);
+    }
 }
 
 // -------------------------------------------------------------------------
@@ -1105,11 +1335,14 @@ int main() {
     test_createPopulation_cantidad_exacta();
     test_createPopulation_respeta_la_dimension();
     test_warm_start_opt_in();
+    test_semilla_valida();
     test_catalogo_semillas_por_caso();
     test_genericos_compartidos_entre_casos();
     test_warm_start_inyecta_el_catalogo_del_caso();
+    test_warm_start_rellena_huecos_con_aleatorios();
+    test_warm_start_omite_entradas_mas_largas_que_la_dimension();
     test_cuota_semillas();
-    test_warm_start_cuota_del_5_por_ciento();
+    test_warm_start_cuota_por_poblacion();
     test_createPopulation_reproducible();
     test_config_defaults();
     test_config_overrides();

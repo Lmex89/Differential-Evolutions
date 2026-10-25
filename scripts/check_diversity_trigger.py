@@ -15,6 +15,11 @@ emite el bucle real:
    bucle sigue reiniciando por `trigger=stale`.
 4. En modo legacy no existe `trigger=diversity`: la linea conserva
    `fraction=0.80`, `trigger=stale` y no imprime `mutation_share=`.
+5. Con `ODE_WARM_START=1` en el caso 1 (issue #148), la cuota warm a
+   poblacion 4 es ceil(0.05*4)=1: la cabecera informa `warm_seeds=1` y el
+   disparador por diversidad sigue evaluable en la frontera inclusiva del
+   25% de finitos, porque la unica semilla inyectada basta para pasar la
+   guarda aunque los tres aleatorios queden rotos.
 
 En Python seria un test de integracion de pytest que ejecuta el entry point
 como subproceso y valida su stdout, el mismo patron que
@@ -30,12 +35,14 @@ from pathlib import Path
 
 BINARIO = Path(__file__).resolve().parents[1] / "build" / "ode-solver"
 
-# Poblacion minima (4) con arranque aleatorio (warm start apagado): las bases
-# exactas del catalogo (#143) convergen en la generacion 1 y el ciclo de
-# reinicios nunca se ejercita. Con la semilla fija 42 la poblacion aleatoria
-# mantiene individuos finitos y el reinicio conserva el record, asi que la
-# proporcion finita no cae por debajo del 25% y el disparador se evalua cada
-# generacion.
+# Poblacion minima (4). Las corridas del criterio 1-4 usan arranque aleatorio
+# (warm start apagado): en el caso 0 la primera base del catalogo (#143) es la
+# solucion exacta y la corrida convergeria en la generacion 1 sin ejercitar el
+# ciclo de reinicios. Con la semilla fija 42 la poblacion aleatoria mantiene
+# individuos finitos y el reinicio conserva el record, asi que la proporcion
+# finita no cae por debajo del 25% y el disparador se evalua cada generacion.
+# El criterio 5 (issue #148) si activa el warm start, pero en el caso 1, cuya
+# primera base es una serie truncada: finita, no convergente, cuota 1.
 POBLACION = 4
 GENERACIONES = 20
 SEMILLA = 42
@@ -152,21 +159,42 @@ def verificar_escalera(lineas, errores, etiqueta):
     return reinicios
 
 
-def verificar_corrida_diversidad():
-    """Criterio 1-2: diversity dispara, resetea el estancamiento y escala."""
+def verificar_corrida_diversidad(overrides=None, etiqueta="diversity",
+                                 warm_seeds_esperado=None):
+    """Criterios 1-2 (y 5): diversity dispara, resetea el estancamiento y escala.
+
+    `overrides` cambia el entorno de la corrida (el escenario warm del criterio 5
+    activa `ODE_WARM_START=1` en el caso 1). Con `warm_seeds_esperado` ademas se
+    valida la cabecera: la cuota ceil(0.05*4)=1 debe inyectar exactamente esa
+    cantidad de semillas finitas del catalogo (issue #148). En Python seria un
+    parametro `esperado=1` con default `None`.
+    """
     proceso = correr_solver(
         {
             # Umbral enorme: cualquier CV finito cae por debajo.
             "ODE_DIV_THRESHOLD": "1000000000",
             "ODE_STALE_LIMIT": str(STALE_LIMIT_DIVERSIDAD),
+            **(overrides or {}),
         }
     )
     if proceso.returncode != 0:
-        return [f"corrida diversity salio con codigo {proceso.returncode}"]
+        return [f"corrida {etiqueta} salio con codigo {proceso.returncode}"]
 
     lineas = [linea for linea in proceso.stdout.splitlines() if linea.strip()]
     errores = []
     reinicios = []
+
+    # Criterio 5: la cabecera informa el warm start real de la corrida. La
+    # cuota a poblacion 4 es ceil(0.05*4)=1 y la primera base del caso 1
+    # (x, serie truncada de Si(x)) es finita, asi que warm_seeds=1.
+    if warm_seeds_esperado is not None:
+        cabecera = next((linea for linea in lineas
+                         if "de_run_start |" in linea), "")
+        for campo in ("warm_start=1", f"warm_seeds={warm_seeds_esperado}"):
+            if campo not in cabecera:
+                errores.append(
+                    f"{etiqueta}: la cabecera no informa {campo}: {cabecera!r}"
+                )
 
     for linea in lineas:
         coincidencia = RE_REINICIO_ADAPTATIVO.search(linea)
@@ -186,23 +214,43 @@ def verificar_corrida_diversidad():
             )
         if trigger != "diversity":
             errores.append(
-                f"gen={gen}: trigger={trigger}, esperado diversity con "
-                "ODE_DIV_THRESHOLD enorme"
+                f"{etiqueta}: gen={gen}: trigger={trigger}, esperado diversity "
+                "con ODE_DIV_THRESHOLD enorme"
             )
         # El reinicio resetea el contador: nunca debe acercarse al limite que
         # habilitaria el canal de estancamiento.
         if stagnant >= STALE_LIMIT_DIVERSIDAD:
             errores.append(
-                f"gen={gen}: stagnant_gens={stagnant} no se resetearon tras "
-                "el reinicio por diversidad"
+                f"{etiqueta}: gen={gen}: stagnant_gens={stagnant} no se "
+                "resetearon tras el reinicio por diversidad"
             )
 
     if not reinicios:
-        errores.append("la corrida no emitio ningun reinicio por diversidad")
+        errores.append(f"la corrida {etiqueta} no emitio ningun reinicio por "
+                       "diversidad")
     else:
-        verificar_escalera(lineas, errores, "diversity")
+        verificar_escalera(lineas, errores, etiqueta)
 
     return errores
+
+
+def verificar_corrida_diversidad_warm():
+    """Criterio 5 (issue #148): frontera warm de la cuota a poblacion 4.
+
+    Con `ODE_WARM_START=1` la cuota es ceil(0.05*4)=1: solo la primera base
+    del catalogo entra en el censo. En el caso 0 esa base es la solucion
+    exacta (fitness 0.0) y la corrida converge en la generacion 1 sin dejar
+    evaluar el disparador — por eso las corridas del criterio 1-2 siguen con
+    arranque aleatorio. El caso 1 usa la mejor serie truncada expresable (x,
+    fitness ~4.5e-2): finita pero no convergente, de modo que el canal de
+    diversidad debe seguir evaluable con la unica semilla inyectada como
+    proporcion finita justo en el 25% inclusivo (1 de 4).
+    """
+    return verificar_corrida_diversidad(
+        overrides={"ODE_CASE": "1", "ODE_WARM_START": "1"},
+        etiqueta="diversity-warm",
+        warm_seeds_esperado=1,
+    )
 
 
 def verificar_corrida_estancamiento():
@@ -314,6 +362,7 @@ def main():
     errores = []
     try:
         errores.extend(verificar_corrida_diversidad())
+        errores.extend(verificar_corrida_diversidad_warm())
         errores.extend(verificar_corrida_estancamiento())
         errores.extend(verificar_corrida_legacy())
     except subprocess.TimeoutExpired:
@@ -328,7 +377,9 @@ def main():
 
     print(
         "check_diversity_trigger: PASS | trigger=diversity resetea el "
-        "estancamiento, comparte la escalera y legacy no dispara por diversidad"
+        "estancamiento, comparte la escalera, legacy no dispara por "
+        "diversidad y la cuota warm=1 a poblacion 4 mantiene el canal "
+        "evaluable (issue #148)"
     )
     return 0
 

@@ -45,7 +45,10 @@
   `python3 scripts/check_diversity_trigger.py` (forces the diversity channel
   with `ODE_DIV_THRESHOLD=1000000000` and validates `trigger=diversity`, the
   stale-window reset, the shared escalation ladder, `trigger=stale` with the
-  channel off, and the untouched legacy restart parameters), and
+  channel off, the untouched legacy restart parameters, and the warm-start
+  boundary (issue #148): with `ODE_WARM_START=1` at case 1 and pop=4 the
+  header reports `warm_seeds=1` and the channel stays evaluable at the
+  inclusive 25% finite fraction), and
   `python3 scripts/check_restart_ab.py` (runs `scripts/restart_ab.sh` in its
   short mode and validates the legacy-vs-adaptive comparison table, the
   per-mode `restart_mode=` wiring and the identical budgets).
@@ -107,12 +110,19 @@
   the five preloaded prototype seeds (issue #144), followed by the 15 shared
   generic blocks (issue #145). Injection is capped at
   `min(ceil(0.05 × population), catalog size)` (issue #146): with the default
-  population of 100 only the five bases enter (`warm_seeds=5`), with
-  `ODE_POP=200` the first ten entries enter (`warm_seeds=10`), with
-  `ODE_POP=300` the first fifteen enter (`warm_seeds=15`), and with
-  `ODE_POP=500` the full twenty-five enter (`warm_seeds=25`); entries longer
-  than the dimension are skipped and do not consume quota. The run header
-  reports `warm_seeds=N`, the number of catalog entries actually injected.
+  population of 100 only the five bases are considered (`warm_seeds=5`), with
+  `ODE_POP=200` the first ten entries are considered (eight valid,
+  `warm_seeds=8`), with `ODE_POP=300` the first fifteen are considered
+  (thirteen valid, `warm_seeds=13`), and with `ODE_POP=500` all twenty-five
+  are considered (twenty-three valid, `warm_seeds=23`, because the two
+  preloaded seeds that use `SQRT(X)` are rejected). Every quota attempt
+  is validated at injection time (issue #147): it must fit in the configured
+  dimension, render hole-free, contain an x-dependent leaf, and have finite
+  fitness for the active case. A rejected attempt leaves a uniform-random
+  individual in its slot, so the population size is always exact; entries
+  longer than the dimension are rejected the same way. The run header reports
+  `warm_seeds=N`, the number of valid catalog seeds actually injected (random
+  fill-ins excluded).
    `ODE_STALE_LIMIT` (default 500) and `ODE_RESTART_FRACTION` (default 0.8) control the restart mechanism: after `stale_limit` generations without improvement, `restart_fraction` of the population is replaced with fresh random individuals while preserving the best solution found.
    `ODE_RESTART_MODE` (`legacy`, the default, or `adaptive`) selects the restart mode and is reported in the `de_run_start` header. In `adaptive` mode the restart parameters escalate (issue #128): `ODE_RESTART_MIN_FRACTION` (0.4) grows by 0.2 per consecutive restart without a new best up to `ODE_RESTART_FRACTION` (0.8), and after `ODE_RESTART_CAP` (3) consecutive restarts the parameters become refinement-only (fraction 0.2, mutation share 1.0); a `new_best` resets the ladder. Each adaptive restart then keeps the fittest `100% − fraction` of the population (the all-time record always survives, re-injected among the replacements when absent) and replaces only the worst share: `ODE_RESTART_MUTATION_SHARE` (0.5) of the replacements are 1–2-token point mutations of elites and the rest fresh uniform individuals (issue #127). The `restart |` line reports `trigger=stale|diversity`, `fraction=`, `kept=` and `replaced=`, plus `mutation_share=` in adaptive mode. In adaptive mode the diversity trigger (issue #129) computes the coefficient of variation (population std / mean) over the finite fitnesses each generation; it fires through the same restart routine and escalation state when at least 25% of the population is finite, a finite record exists, and the CV is below `ODE_DIV_THRESHOLD` (0.05). A diversity restart logs `trigger=diversity`, and any restart resets the stale-generation window. `ODE_DIV_THRESHOLD` is ignored in legacy mode, which stays bit-reproducible.
 - There is no CI. For behaviorally neutral DE changes, compare fixed-seed runs
@@ -124,10 +134,13 @@
 ## Architecture and invariants
 
 - `src/parse_tree.cpp` owns `main()` (behind `ODE_NO_MAIN` for tests), the DE
-  loop, `FunbObj` fitness, mutation, and crossover. `src/dualfunctions.{h,cpp}`
-  interprets prefix token vectors as `[y, y', y'']`; `src/semilla.{h,cpp}`
-  resolves `ODE_SEED`; `src/token.h` is the token vocabulary, arity,
-  rendering, and random-token source of truth.
+  loop, mutation, crossover, the restart lifecycle, the warm-start catalog and
+  configuration. `src/funbobj.{h,cpp}` (issue #157) owns `FunbObj` and
+  `x_rango`: the fitness evaluation, its per-case residual and
+  initial-condition switches (internal to the `.cpp`) and the 100-point grid.
+  `src/dualfunctions.{h,cpp}` interprets prefix token vectors as `[y, y', y'']`;
+  `src/semilla.{h,cpp}` resolves `ODE_SEED`; `src/token.h` is the token
+  vocabulary, arity, rendering, and random-token source of truth.
   `docs/legacy/parse_tree_bckp.cpp` is a historical copy that also defines
   `main()`: never add it to a build.
 - `src/salida.{h,cpp}` owns the output destination: `resolver_salida()` maps
@@ -138,10 +151,13 @@
   `tests/test_funbobj_const.cpp`, `tests/test_ode_cases.cpp`,
   `tests/test_per_case_config.cpp`, `tests/test_restart_escalation.cpp`,
   `tests/test_diversity_trigger.cpp`, and `tests/test_restart_lifecycle.cpp`
-  include `parse_tree.cpp` directly because `FunbObj` has no header. Their
-  CMake rules intentionally compile with `-DODE_NO_MAIN` and keep
+  include `parse_tree.cpp` directly for the DE loop and link
+  `src/funbobj.cpp` (issue #157), where `FunbObj` and `x_rango` now live.
+  Their CMake rules intentionally compile with `-DODE_NO_MAIN` and keep
   `parse_tree.cpp` off the compile line; do not "simplify" this into
   compiling that source twice.
+  `tests/test_header_hygiene.cpp` includes `funbobj.h` to keep the module
+  interface self-contained.
 - Interpreter operand blanking to `NAN` is deliberate. Invalid/incomplete or
   x-independent trees receive `INFINITY` fitness rather than throwing, and
   `fitness()` caches per individual: individuals are replaced whole, never
