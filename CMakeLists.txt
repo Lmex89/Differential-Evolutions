@@ -32,6 +32,7 @@ add_compile_options(-Wall -O3)
 # ---------------------------------------------------------------------------
 add_executable(ode-solver
     src/dualfunctions.cpp
+    src/funbobj.cpp
     src/semilla.cpp
     src/salida.cpp
     src/parse_tree.cpp
@@ -64,12 +65,14 @@ add_test(NAME test_salida COMMAND test_salida)
 
 # test_mutation (issue #5), test_crossover (issue #6) y test_token (issue #31)
 # enlazan parse_tree.cpp (ahi viven Mutation y Recombination) y, con el, sus
-# dependencias. -DODE_NO_MAIN descarta el main() del programa para que el
-# unico main() de cada binario sea el del test (misma tecnica que el Makefile).
+# dependencias, entre ellas funbobj.cpp (FunbObj y x_rango, issue #157).
+# -DODE_NO_MAIN descarta el main() del programa para que el unico main() de
+# cada binario sea el del test (misma tecnica que el Makefile).
 foreach(nombre IN ITEMS test_mutation test_crossover test_token)
     add_executable(${nombre}
         src/semilla.cpp
         src/dualfunctions.cpp
+        src/funbobj.cpp
         src/parse_tree.cpp
         tests/${nombre}.cpp
     )
@@ -81,14 +84,16 @@ endforeach()
 # test_funbobj_const (issue #42), test_grid (issue #7), test_population
 # (issue #11), test_restart_escalation (issues #127/#128),
 # test_diversity_trigger (issue #129), test_restart_lifecycle (issue #138) y
-# el resto incluyen parse_tree.cpp desde su propio .cpp (FunbObj no tiene
-# header): parse_tree.cpp NO se compila aparte o habria simbolos duplicados.
-# Necesitan src/ en el include path (asi resuelven tanto el .cpp incluido como
-# sus headers) y -DODE_NO_MAIN para que gane el main() del test.
+# el resto incluyen parse_tree.cpp desde su propio .cpp (el bucle DE y el
+# reinicio); FunbObj y x_rango viven ahora en funbobj.cpp (issue #157), que se
+# enlaza aparte. parse_tree.cpp NO se compila aparte o habria simbolos
+# duplicados. Necesitan src/ en el include path (asi resuelven tanto el .cpp
+# incluido como sus headers) y -DODE_NO_MAIN para que gane el main() del test.
 foreach(nombre IN ITEMS test_funbobj_const test_grid test_population test_ode_cases test_per_case_config test_restart_escalation test_diversity_trigger test_restart_lifecycle)
     add_executable(${nombre}
         src/semilla.cpp
         src/dualfunctions.cpp
+        src/funbobj.cpp
         tests/${nombre}.cpp
     )
     target_compile_definitions(${nombre} PRIVATE ODE_NO_MAIN)
