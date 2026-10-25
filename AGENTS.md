@@ -134,10 +134,13 @@
 ## Architecture and invariants
 
 - `src/parse_tree.cpp` owns `main()` (behind `ODE_NO_MAIN` for tests), the DE
-  loop, `FunbObj` fitness, mutation, and crossover. `src/dualfunctions.{h,cpp}`
-  interprets prefix token vectors as `[y, y', y'']`; `src/semilla.{h,cpp}`
-  resolves `ODE_SEED`; `src/token.h` is the token vocabulary, arity,
-  rendering, and random-token source of truth.
+  loop, mutation, crossover, the restart lifecycle, the warm-start catalog and
+  configuration. `src/funbobj.{h,cpp}` (issue #157) owns `FunbObj` and
+  `x_rango`: the fitness evaluation, its per-case residual and
+  initial-condition switches (internal to the `.cpp`) and the 100-point grid.
+  `src/dualfunctions.{h,cpp}` interprets prefix token vectors as `[y, y', y'']`;
+  `src/semilla.{h,cpp}` resolves `ODE_SEED`; `src/token.h` is the token
+  vocabulary, arity, rendering, and random-token source of truth.
   `docs/legacy/parse_tree_bckp.cpp` is a historical copy that also defines
   `main()`: never add it to a build.
 - `src/salida.{h,cpp}` owns the output destination: `resolver_salida()` maps
@@ -148,10 +151,13 @@
   `tests/test_funbobj_const.cpp`, `tests/test_ode_cases.cpp`,
   `tests/test_per_case_config.cpp`, `tests/test_restart_escalation.cpp`,
   `tests/test_diversity_trigger.cpp`, and `tests/test_restart_lifecycle.cpp`
-  include `parse_tree.cpp` directly because `FunbObj` has no header. Their
-  CMake rules intentionally compile with `-DODE_NO_MAIN` and keep
+  include `parse_tree.cpp` directly for the DE loop and link
+  `src/funbobj.cpp` (issue #157), where `FunbObj` and `x_rango` now live.
+  Their CMake rules intentionally compile with `-DODE_NO_MAIN` and keep
   `parse_tree.cpp` off the compile line; do not "simplify" this into
   compiling that source twice.
+  `tests/test_header_hygiene.cpp` includes `funbobj.h` to keep the module
+  interface self-contained.
 - Interpreter operand blanking to `NAN` is deliberate. Invalid/incomplete or
   x-independent trees receive `INFINITY` fitness rather than throwing, and
   `fitness()` caches per individual: individuals are replaced whole, never
