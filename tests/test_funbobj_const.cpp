@@ -6,8 +6,8 @@
 // sin necesidad de const_cast. La caché de fitness debe funcionar incluso en
 // objetos const (usando `mutable` internamente, como `@cached_property` en Python).
 //
-// Se compila con -DODE_NO_MAIN y junto con dualfunctions.cpp; parse_tree.cpp
-// se incluye porque FunbObj no tiene header (mismo patrón que test_grid.cpp).
+// Enlaza funbobj.cpp y dualfunctions.cpp (issue #158): FunbObj vive tras
+// funbobj.h, asi que el test ya no compila el bucle DE ni necesita ODE_NO_MAIN.
 
 #include <iostream>
 #include <iomanip>
@@ -18,8 +18,9 @@
 
 #include "dualfunctions.h"
 
-// Incluir parse_tree.cpp para acceder a FunbObj (mismo patrón que test_grid.cpp).
-#include "parse_tree.cpp"
+// Interfaz publica del modulo de fitness (issue #157): constructor, fitness(),
+// represant(), vecvalue() y x_rango.
+#include "funbobj.h"
 
 // -------------------------------------------------------------------------
 // Arnés mínimo (mismo estilo que test_grid): contadores globales y helpers.

@@ -10,12 +10,12 @@
 
 #include "../src/token.h"
 
-// FunbObj has no header; compile parse_tree.cpp with -DODE_NO_MAIN
-// (same pattern as test_grid.cpp, test_funbobj_const.cpp).
-#include "../src/parse_tree.cpp"
+// FunbObj lives behind its own header since issue #157; this test links
+// funbobj.cpp and dualfunctions.cpp (issue #158) and no longer compiles the
+// DE loop, so it needs neither parse_tree.cpp nor ODE_NO_MAIN.
+#include "../src/funbobj.h"
 
 using namespace std;
-using ldouble = long double;
 
 static int g_checks = 0;
 static int g_fallos = 0;

@@ -81,15 +81,30 @@ foreach(nombre IN ITEMS test_mutation test_crossover test_token)
     add_test(NAME ${nombre} COMMAND ${nombre})
 endforeach()
 
-# test_funbobj_const (issue #42), test_grid (issue #7), test_population
-# (issue #11), test_restart_escalation (issues #127/#128),
-# test_diversity_trigger (issue #129), test_restart_lifecycle (issue #138) y
-# el resto incluyen parse_tree.cpp desde su propio .cpp (el bucle DE y el
-# reinicio); FunbObj y x_rango viven ahora en funbobj.cpp (issue #157), que se
-# enlaza aparte. parse_tree.cpp NO se compila aparte o habria simbolos
-# duplicados. Necesitan src/ en el include path (asi resuelven tanto el .cpp
-# incluido como sus headers) y -DODE_NO_MAIN para que gane el main() del test.
-foreach(nombre IN ITEMS test_funbobj_const test_grid test_population test_ode_cases test_per_case_config test_restart_escalation test_diversity_trigger test_restart_lifecycle)
+# Los tres tests de fitness (test_funbobj_const, issue #42; test_grid, issue
+# #7; test_ode_cases, issues #103/#104) incluyen funbobj.h (issue #158) y
+# enlazan solo los modulos que usan: funbobj.cpp y su dependencia
+# dualfunctions.cpp. Ya no compilan parse_tree.cpp, asi que no necesitan
+# semilla.cpp ni -DODE_NO_MAIN.
+foreach(nombre IN ITEMS test_funbobj_const test_grid test_ode_cases)
+    add_executable(${nombre}
+        src/dualfunctions.cpp
+        src/funbobj.cpp
+        tests/${nombre}.cpp
+    )
+    target_include_directories(${nombre} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    add_test(NAME ${nombre} COMMAND ${nombre})
+endforeach()
+
+# El resto de tests con bucle DE (test_population, issue #11;
+# test_per_case_config; test_restart_escalation, issues #127/#128;
+# test_diversity_trigger, issue #129; test_restart_lifecycle, issue #138)
+# sigue incluyendo parse_tree.cpp desde su propio .cpp (el bucle DE y el
+# reinicio), que usa semilla.cpp, dualfunctions.cpp y funbobj.cpp (issue
+# #157). parse_tree.cpp NO se compila aparte o habria simbolos duplicados.
+# Necesitan src/ en el include path (asi resuelven tanto el .cpp incluido como
+# sus headers) y -DODE_NO_MAIN para que gane el main() del test.
+foreach(nombre IN ITEMS test_population test_per_case_config test_restart_escalation test_diversity_trigger test_restart_lifecycle)
     add_executable(${nombre}
         src/semilla.cpp
         src/dualfunctions.cpp
