@@ -147,16 +147,20 @@
   `ODE_LOG`/`ODE_LOG_FILE` to a mode and path, and `RedireccionSalida` is the
   RAII redirect that swaps `std::cout` once at startup and restores it on
   exit.
-- `tests/test_grid.cpp`, `tests/test_population.cpp`,
-  `tests/test_funbobj_const.cpp`, `tests/test_ode_cases.cpp`,
+- The three fitness tests (`tests/test_funbobj_const.cpp`,
+  `tests/test_grid.cpp`, `tests/test_ode_cases.cpp`) include `funbobj.h`
+  (issue #158) and link only `src/funbobj.cpp` and its `src/dualfunctions.cpp`
+  dependency; their CMake rules carry no `ODE_NO_MAIN` and no
+  `src/semilla.cpp`.
+- The remaining DE-loop tests (`tests/test_population.cpp`,
   `tests/test_per_case_config.cpp`, `tests/test_restart_escalation.cpp`,
-  `tests/test_diversity_trigger.cpp`, and `tests/test_restart_lifecycle.cpp`
-  include `parse_tree.cpp` directly for the DE loop and link
-  `src/funbobj.cpp` (issue #157), where `FunbObj` and `x_rango` now live.
-  Their CMake rules intentionally compile with `-DODE_NO_MAIN` and keep
-  `parse_tree.cpp` off the compile line; do not "simplify" this into
-  compiling that source twice.
-  `tests/test_header_hygiene.cpp` includes `funbobj.h` to keep the module
+  `tests/test_diversity_trigger.cpp`, `tests/test_restart_lifecycle.cpp`)
+  include `parse_tree.cpp` directly and link `src/semilla.cpp`,
+  `src/dualfunctions.cpp` and `src/funbobj.cpp` (issue #157), where `FunbObj`
+  and `x_rango` live. Their CMake rules intentionally compile with
+  `-DODE_NO_MAIN` and keep `parse_tree.cpp` off the compile line; do not
+  "simplify" this into compiling that source twice.
+- `tests/test_header_hygiene.cpp` includes `funbobj.h` to keep the module
   interface self-contained.
 - Interpreter operand blanking to `NAN` is deliberate. Invalid/incomplete or
   x-independent trees receive `INFINITY` fitness rather than throwing, and
