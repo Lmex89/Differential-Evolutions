@@ -183,7 +183,7 @@ The expected solution for the default ODE `y'' + y = 0` with `y(0) = y'(0) = 1` 
 ```bash
 cmake -B build                              # configure (reads CMakeLists.txt)
 cmake --build build                         # compile -> build/ode-solver
-ODE_SEED=42 ./build/ode-solver | tail -30   # reproducible run (seed 42)
+ODE_SEED=42 ODE_LOG=terminal ./build/ode-solver | tail -30  # reproducible run (seed 42)
 ctest --test-dir build                      # run the test suite
 ```
 
@@ -283,7 +283,7 @@ up to the generation cap (`max_generations=5000` by default). Output can be
 very verbose — consider piping through `tail`:
 
 ```bash
-./build/ode-solver | tail -30
+ODE_LOG=terminal ./build/ode-solver | tail -30
 ```
 
 ### Testing
@@ -292,7 +292,7 @@ very verbose — consider piping through `tail`:
 ctest --test-dir build
 ```
 
-This runs the 14 C++ tests registered in `CMakeLists.txt` (all targets are built by the preceding `cmake --build build`). For a focused test:
+This runs the 15 C++ tests registered in `CMakeLists.txt` (all targets are built by the preceding `cmake --build build`). For a focused test:
 
 ```bash
 cmake --build build --target test_mutation

@@ -39,7 +39,7 @@ add_executable(ode-solver
 )
 
 # ---------------------------------------------------------------------------
-# Tests: los mismos 9 binarios de `make test`, ahora en tests/. Cada test
+# Tests: los mismos 15 binarios registrados por CTest, ahora en tests/. Cada test
 # define su propio main() y devuelve codigo distinto de cero si falla algun
 # assert (el equivalente al exit code de pytest). Todos necesitan src/ en el
 # include path porque los headers (dualfunctions.h, semilla.h, token.h) ya no

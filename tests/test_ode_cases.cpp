@@ -10,9 +10,10 @@
 
 #include "../src/token.h"
 
-// FunbObj lives behind its own header since issue #157; this test links
-// funbobj.cpp and dualfunctions.cpp (issue #158) and no longer compiles the
-// DE loop, so it needs neither parse_tree.cpp nor ODE_NO_MAIN.
+// FunbObj vive tras su propio header desde el issue #157; este test enlaza
+// funbobj.cpp y dualfunctions.cpp (issue #158) y ya no compila el bucle DE,
+// asi que no necesita parse_tree.cpp ni ODE_NO_MAIN. En Python seria importar
+// el modulo de fitness en vez de compilar el modulo completo del solver.
 #include "../src/funbobj.h"
 
 using namespace std;

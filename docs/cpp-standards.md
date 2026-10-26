@@ -158,12 +158,12 @@ logical change per commit (see the commit conventions in `AGENTS.md`).
 There is no CI: verification is manual (AGENTS.md).
 
 - `cmake --build build` must stay warning-clean under `-std=c++17 -Wall -O3`; `ctest --test-dir build`
-  must pass all nine binaries (`test_dual` ... `test_funbobj_const`).
+  must pass all 15 binaries (`test_dual` ... `test_header_hygiene`).
 - Pure helpers get a unit test in the existing style (see `test_mutation.cpp`,
   `test_crossover.cpp`) rather than a manual run.
 - Behavioural changes to the DE loop: run with a fixed `ODE_SEED` (and
   `ODE_CASE=1` when relevant) and check the logged best fitness, e.g.
-  `ODE_SEED=42 timeout 60 ./build/ode-solver | tail -30`; compare against the
+  `ODE_SEED=42 ODE_LOG=terminal timeout 60 ./build/ode-solver | tail -30`; compare against the
   pre-change revision with `scripts/ab_experiment.sh` when the change is
   supposed to be neutral.
 

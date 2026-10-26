@@ -7,9 +7,12 @@ mapped to this repo).
 the compliance snapshot and findings below remain the evidence reference for
 those tickets.
 
-**Baseline.** `cmake --build build` builds warning-free with `g++ 15.2` under
-`-std=c++17 -Wall -O3`; `ctest --test-dir build` is green (nine binaries +
-`python3 scripts/check_dual_validation.py` → 48/48) before any change below.
+**Historical baseline.** At the time this plan was written, `cmake --build
+build` was warning-free with `g++ 15.2` under `-std=c++17 -Wall -O3`, and
+`ctest --test-dir build` was green for nine binaries plus
+`python3 scripts/check_dual_validation.py` → 48/48. The current build has 15
+test binaries; the historical count is retained here as evidence for the
+ticket series below.
 
 **Scope audited.** `parse_tree.cpp`, `dualfunctions.h`, `dualfunctions.cpp`,
 `semilla.h`, `semilla.cpp`, `main()`, and the `test_*.cpp` files where a change
@@ -226,12 +229,12 @@ style(cpp): normalize indentation to four spaces
 ## 4. Verification protocol (every step)
 
 1. `cmake --build build` — must stay warning-free under `-std=c++17 -Wall -O3`.
-2. `ctest --test-dir build` — nine binaries must pass plus `python3
+2. `ctest --test-dir build` — all 15 binaries must pass plus `python3
    scripts/check_dual_validation.py` (48/48 baseline).
 3. Fixed-seed neutrality check for every "neutral" step:
 
    ```sh
-   ODE_SEED=42 timeout 120 ./build/ode-solver > /tmp/run.log
+   ODE_SEED=42 ODE_LOG=terminal timeout 120 ./build/ode-solver > /tmp/run.log
    grep -E "new_best|solution|no_solution" /tmp/run.log   # compare before/after
    grep -c 'gen=' /tmp/run.log                            # generation count
    grep de_run_end /tmp/run.log | sed -E 's/elapsed_cpu_s=[^ ]+/elapsed_cpu_s=X/'

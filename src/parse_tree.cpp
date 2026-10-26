@@ -1547,25 +1547,25 @@ int main() {
     // Descripcion legible del caso: el dato maquina es el campo `case=` de
     // arriba; este renglon es la explicacion y va como texto libre (sin
     // clave=valor) para no confundir al parser del script A/B.
-    log_info() << "ode_case | " << caso << ": ";
+    // El texto descriptivo se prepara antes de escribir para que toda la
+    // salida pase por log_info(), como un mensaje de logging en Python.
+    const char* descripcion_caso = "juguete: y'' + y = 0, y(0)=1, y'(0)=1";
     if (caso == 1){
-        cout << "paper, ec. (18): x*y'' + y' - cos(x) = 0, y(0)=0, y'(0)=1";
+        descripcion_caso = "paper, ec. (18): x*y'' + y' - cos(x) = 0, y(0)=0, y'(0)=1";
     } else if (caso == 2){
-        cout << "hiperbolico (issue #61): y'' - y = 0, y(0)=1, y'(0)=0, solucion cosh(x)";
+        descripcion_caso = "hiperbolico (issue #61): y'' - y = 0, y(0)=1, y'(0)=0, solucion cosh(x)";
     } else if (caso == 3){
-        cout << "oscilador amortiguado (issue #103): y'' + 2y' + 2y = 0, y(0)=1, y'(0)=-1, solucion e^(-x)*cos(x)";
+        descripcion_caso = "oscilador amortiguado (issue #103): y'' + 2y' + 2y = 0, y(0)=1, y'(0)=-1, solucion e^(-x)*cos(x)";
     } else if (caso == 4){
-        cout << "oscilador forzado (issue #103): y'' + y = e^x, y(0)=0, y'(0)=0, solucion (e^x - cos(x) - sin(x))/2";
+        descripcion_caso = "oscilador forzado (issue #103): y'' + y = e^x, y(0)=0, y'(0)=0, solucion (e^x - cos(x) - sin(x))/2";
     } else if (caso == 5){
-        cout << "resonancia (issue #103): y'' - y = e^x, y(0)=0, y'(0)=0, solucion (2x*e^x - e^x + e^(-x))/4";
+        descripcion_caso = "resonancia (issue #103): y'' - y = e^x, y(0)=0, y'(0)=0, solucion (2x*e^x - e^x + e^(-x))/4";
     } else if (caso == 6){
-        cout << "Legendre (issue #104): (1-x²)y'' - 2xy' + 6y = 0, y(0)=-1/2, y'(0)=0, solucion P₂(x)=(3x²-1)/2";
+        descripcion_caso = "Legendre (issue #104): (1-x²)y'' - 2xy' + 6y = 0, y(0)=-1/2, y'(0)=0, solucion P₂(x)=(3x²-1)/2";
     } else if (caso == 7){
-        cout << "Hermite (issue #104): y'' - 2xy' + 4y = 0, y(0)=-2, y'(0)=0, solucion H₂(x)=4x²-2";
-    } else {
-        cout << "juguete: y'' + y = 0, y(0)=1, y'(0)=1";
+        descripcion_caso = "Hermite (issue #104): y'' - 2xy' + 4y = 0, y(0)=-2, y'(0)=0, solucion H₂(x)=4x²-2";
     }
-    cout << '\n';
+    log_info() << "ode_case | " << caso << ": " << descripcion_caso << '\n';
     cout.flush();
 
     while(flag){

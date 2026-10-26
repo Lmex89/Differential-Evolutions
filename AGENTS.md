@@ -22,10 +22,11 @@
   historical files in `docs/legacy/` (the backup
   `docs/legacy/parse_tree_bckp.cpp` and the notebook
   `docs/legacy/Untitled.ipynb`).
-- `ctest --test-dir build` builds and runs the 15 C++ tests registered in
-  `CMakeLists.txt`: each test file under `tests/` is its own executable, and
-  its exit code is nonzero exactly when an assert fails (the same contract
-  as pytest). For a focused test, build its target and run it directly:
+- `cmake --build build` builds the 15 C++ test targets registered in
+  `CMakeLists.txt`, and `ctest --test-dir build` runs them: each test file
+  under `tests/` is its own executable, and its exit code is nonzero exactly
+  when an assert fails (the same contract as pytest). For a focused test,
+  build its target and run it directly:
   `cmake --build build --target test_mutation` and `./build/test_mutation`.
 - `build/` is ignored by git; never commit build artifacts. When adding a
   test, put it under `tests/` and register it in `CMakeLists.txt`; keep this
