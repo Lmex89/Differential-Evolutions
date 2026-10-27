@@ -1,4 +1,4 @@
-// test_restart_lifecycle.cpp — tests del ciclo de vida de reinicios (issue #139).
+// test_restart_lifecycle.cpp — tests del ciclo de vida de reinicios (issues #139 y #167).
 //
 // El issue #138 definio la costura entre el bucle DE y la decision de reinicio:
 // ControlReinicio recibe la configuracion inmutable una sola vez y, por
@@ -8,19 +8,15 @@
 // stale, el reset por `new_best`, la supresion legacy y el refinamiento tras
 // el cap.
 //
-// Se compila con -DODE_NO_MAIN y junto con dualfunctions.cpp y semilla.cpp;
-// parse_tree.cpp se incluye mas abajo (FunbObj no tiene header), el mismo
-// patron que test_restart_escalation.cpp. En Python seria
-// `from parse_tree import ControlReinicio, DecisionReinicio`.
+// Se compila con el modulo restart_lifecycle.cpp; el test cruza la costura del
+// modulo sin incluir parse_tree.cpp. En Python seria
+// `from restart_lifecycle import ControlReinicio, DecisionReinicio`.
 
 #include <iostream>
 #include <string>
 #include <cmath>
 
-#include "dualfunctions.h"
-#include "token.h"
-
-#include "parse_tree.cpp"
+#include "restart_lifecycle.h"
 
 // -------------------------------------------------------------------------
 // Arnes minimo (mismo estilo que test_restart_escalation.cpp).

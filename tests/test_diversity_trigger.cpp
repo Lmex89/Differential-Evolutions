@@ -1,4 +1,4 @@
-// test_diversity_trigger.cpp — tests del disparador por diversidad (issue #129).
+// test_diversity_trigger.cpp — tests del disparador por diversidad (issues #129 y #167).
 //
 // El issue #129 pide detectar colapso de diversidad en modo adaptive: se
 // calcula el coeficiente de variacion (std/mean) sobre las fitness FINITAS y,
@@ -6,19 +6,15 @@
 // cae por debajo de ODE_DIV_THRESHOLD, se reinicia por el mismo canal que el
 // estancamiento.
 //
-// Se compila con -DODE_NO_MAIN y junto con dualfunctions.cpp y semilla.cpp;
-// parse_tree.cpp se incluye mas abajo (FunbObj no tiene header), el mismo
-// patron que test_restart_escalation.cpp. En Python seria
-// `from parse_tree import ResumenDiversidad, resumir_diversidad`.
+// Se compila con el modulo restart_lifecycle.cpp; el test cruza la costura del
+// modulo sin incluir parse_tree.cpp. En Python seria
+// `from restart_lifecycle import ResumenDiversidad, resumir_diversidad`.
 
 #include <iostream>
 #include <string>
 #include <cmath>
 
-#include "dualfunctions.h"
-#include "token.h"
-
-#include "parse_tree.cpp"
+#include "restart_lifecycle.h"
 
 // -------------------------------------------------------------------------
 // Arnes minimo (mismo estilo que test_restart_escalation.cpp).
@@ -69,8 +65,8 @@ static void check_decimal(const std::string& nombre, long double recibido,
 static void test_cv_sobre_finitos() {
     // Serie clasica de media 5 y desviacion poblacional 2: CV = 2/5 = 0.4.
     // El valor esperado es un literal independiente de la implementacion.
-    const vector<ldouble> fitnesses = {2.0L, 4.0L, 4.0L, 4.0L,
-                                       5.0L, 5.0L, 7.0L, 9.0L};
+    const std::vector<ldouble> fitnesses = {2.0L, 4.0L, 4.0L, 4.0L,
+                                            5.0L, 5.0L, 7.0L, 9.0L};
 
     const ResumenDiversidad resumen = resumir_diversidad(fitnesses);
 
@@ -80,8 +76,8 @@ static void test_cv_sobre_finitos() {
 
     // La misma serie con INFINITY y NaN intercalados debe dar el mismo
     // resumen: los no finitos son arboles invalidos, no diversidad real.
-    const vector<ldouble> con_no_finitos = {2.0L, INFINITY, 4.0L, 4.0L, NAN,
-                                            4.0L, 5.0L, 5.0L, 7.0L, 9.0L};
+    const std::vector<ldouble> con_no_finitos = {2.0L, INFINITY, 4.0L, 4.0L, NAN,
+                                                 4.0L, 5.0L, 5.0L, 7.0L, 9.0L};
     const ResumenDiversidad filtrado = resumir_diversidad(con_no_finitos);
 
     check_int("INFINITY y NaN no cuentan como finitos",
