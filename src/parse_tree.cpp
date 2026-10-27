@@ -565,7 +565,10 @@ int createPopulation(vector<FunbObj>& Population, const ConfigBusqueda& config, 
 // Diversity y reinicio ahora en src/restart_lifecycle.{h,cpp} (issue #166).
 // El módulo expone: ResumenDiversidad, resumir_diversidad(), 
 // dispara_reinicio_por_diversidad(), ControlReinicio, DisparadorReinicio,
-// DecisionReinicio, EscaladorReinicio, ModoReinicio.
+// DecisionReinicio, ModoReinicio.
+// Desde el issue #167 la decision se pide con la evidencia de la generacion:
+// el bucle DE entrega los fitness de la poblacion y el modulo calcula el
+// resumen de diversidad y devuelve la decision.
 // -------------------------------------------------------------------------
 
 // parte_entera: cuantos elementos representa la fraccion `fraccion` de un
@@ -1159,6 +1162,13 @@ int main() {
     // inyectaron de verdad; el resto de la poblacion es aleatoria.
     const int semillas_warm = createPopulation(Population, config_busqueda, caso);
 
+    // Evidencia de cada generacion para el ciclo de vida del reinicio: los
+    // fitness de la poblacion. El buffer se reutiliza entre generaciones
+    // (`clear` + `push_back`) para no reservar memoria cada vez. En Python
+    // seria `evidencia = [ind.fitness() for ind in poblacion]`.
+    vector<ldouble> fitnesses;
+    fitnesses.reserve(Population.size());
+
     // Cr: probabilidad de heredar el gen del mutante en el cruce binomial
     // (eq. (8)). Antes era `int Cr = 85`, un umbral comparado contra el tamano
     // de poblacion; el paper (§5, REVIEW D9) usa 0.2.
@@ -1295,27 +1305,23 @@ int main() {
             cout.flush();
         }
 
-        // El resumen de diversidad solo se calcula en adaptive (issue #129):
-        // en legacy no se evalua y la corrida historica sigue bit-reproducible.
-        // La muestra es la poblacion de esta generacion; fitness() ya esta
-        // cacheada por la seleccion y el barrido del mejor. En Python seria
-        // `resumen = resumir_diversidad([ind.fitness() for ind in poblacion])`.
-        ResumenDiversidad resumen;
-        if (config_reinicio.restart_mode == ModoReinicio::adaptive){
-            vector<ldouble> fitnesses;
-            fitnesses.reserve(Population.size());
-            for (const FunbObj& individuo : Population){
-                fitnesses.push_back(individuo.fitness());
-            }
-            resumen = resumir_diversidad(fitnesses);
+        // La evidencia de la generacion para el ciclo de vida del reinicio:
+        // los fitness de la poblacion (ya cacheados por la seleccion y el
+        // barrido del mejor). El modulo calcula el resumen de diversidad
+        // internamente (issue #167), asi que el bucle DE no decide si la
+        // diversidad se evalua. En Python seria
+        // `evidencia = [ind.fitness() for ind in poblacion]`.
+        fitnesses.clear();
+        for (const FunbObj& individuo : Population){
+            fitnesses.push_back(individuo.fitness());
         }
 
         // El ciclo de vida decide (issue #139): stale tiene prioridad sobre
         // diversity y cualquier reinicio resetea la ventana de estancamiento.
         // En Python seria
-        // `decision = control_reinicio.decidir(nuevo_record, resumen)`.
+        // `decision = control_reinicio.decidir(nuevo_record, fitnesses)`.
         const DecisionReinicio decision =
-            control_reinicio.decidir(nuevo_record, resumen);
+            control_reinicio.decidir(nuevo_record, fitnesses);
 
         // El modo lo elige ODE_RESTART_MODE: `legacy` conserva el reinicio
         // historico y `adaptive` usa el reinicio elitista con composicion

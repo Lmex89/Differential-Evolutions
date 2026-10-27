@@ -9,38 +9,6 @@
 #include <algorithm>
 
 // -------------------------------------------------------------------------
-// EscaladorReinicio: implementacion de los metodos.
-// -------------------------------------------------------------------------
-
-ParametrosReinicio EscaladorReinicio::consumir_siguiente(const ConfigReinicio& config) {
-    ParametrosReinicio parametros;
-
-    if (reinicios_consecutivos_ >= config.restart_cap) {
-        parametros.fraccion = FRACCION_REFINAMIENTO;
-        parametros.cuota_mutacion = CUOTA_MUTACION_REFINAMIENTO;
-    } else {
-        const long double fraccion_escalada =
-            config.restart_min_fraction +
-            INCREMENTO_ESCALADO_REINICIO *
-                static_cast<long double>(reinicios_consecutivos_);
-        // std::min evita que la escalera supere el tope configurado.
-        parametros.fraccion = std::min(config.restart_fraction, fraccion_escalada);
-        parametros.cuota_mutacion = config.restart_mutation_share;
-    }
-
-    // El contador se satura en el cap: mas reinicios ya no cambian la
-    // decision y asi no puede desbordar en una corrida larga (ES.103).
-    if (reinicios_consecutivos_ < config.restart_cap) {
-        reinicios_consecutivos_++;
-    }
-    return parametros;
-}
-
-void EscaladorReinicio::nuevo_record() {
-    reinicios_consecutivos_ = 0;
-}
-
-// -------------------------------------------------------------------------
 // ResumenDiversidad y disparador.
 // -------------------------------------------------------------------------
 
@@ -106,14 +74,14 @@ ControlReinicio::ControlReinicio(const ConfigReinicio& config)
     : config_(config) {}
 
 DecisionReinicio ControlReinicio::decidir(bool nuevo_record,
-                                         const ResumenDiversidad& diversidad) {
+                                         const std::vector<ldouble>& fitnesses) {
     // `new_best` es el unico hecho que corta el estancamiento: resetea
     // tanto la ventana como el episodio de reinicios consecutivos. En
-    // Python: `if nuevo_record: ...; self.escalador.nuevo_record()`.
+    // Python: `if nuevo_record: ...; self.reinicios_consecutivos = 0`.
     if (nuevo_record) {
         hay_record_ = true;
         generaciones_sin_mejora_ = 0;
-        escalador_.nuevo_record();
+        reinicios_consecutivos_ = 0;
     } else {
         generaciones_sin_mejora_++;
     }
@@ -124,12 +92,16 @@ DecisionReinicio ControlReinicio::decidir(bool nuevo_record,
         return reiniciar(DisparadorReinicio::stale);
     }
 
-    // La diversidad solo existe en adaptive (issue #129): en legacy estos
-    // guards ni se evaluan y la corrida historica sigue bit-reproducible.
-    if (config_.restart_mode == ModoReinicio::adaptive &&
-        dispara_reinicio_por_diversidad(diversidad, hay_record_,
-                                        config_.div_threshold)) {
-        return reiniciar(DisparadorReinicio::diversity);
+    // La diversidad solo existe en adaptive (issue #129): en legacy el
+    // resumen ni se calcula, los guards ni se evaluan y la corrida
+    // historica sigue bit-reproducible. En Python:
+    // `if self.modo is ADAPTIVE and dispara_reinicio_por_diversidad(resumir_diversidad(fitnesses), ...): ...`.
+    if (config_.restart_mode == ModoReinicio::adaptive) {
+        const ResumenDiversidad resumen = resumir_diversidad(fitnesses);
+        if (dispara_reinicio_por_diversidad(resumen, hay_record_,
+                                            config_.div_threshold)) {
+            return reiniciar(DisparadorReinicio::diversity);
+        }
     }
 
     // Sin reinicio: ventana por debajo del limite y diversidad sin colapso.
@@ -147,9 +119,33 @@ DecisionReinicio ControlReinicio::reiniciar(DisparadorReinicio disparador) {
     // `reiniciar_poblacion`, pero se informa el valor configurado.
     const ParametrosReinicio parametros =
         config_.restart_mode == ModoReinicio::adaptive
-            ? escalador_.consumir_siguiente(config_)
+            ? consumir_siguiente()
             : ParametrosReinicio{config_.restart_fraction,
                                  config_.restart_mutation_share};
 
     return DecisionReinicio{disparador, parametros, estancadas};
+}
+
+ParametrosReinicio ControlReinicio::consumir_siguiente() {
+    ParametrosReinicio parametros;
+
+    if (reinicios_consecutivos_ >= config_.restart_cap) {
+        parametros.fraccion = FRACCION_REFINAMIENTO;
+        parametros.cuota_mutacion = CUOTA_MUTACION_REFINAMIENTO;
+    } else {
+        const long double fraccion_escalada =
+            config_.restart_min_fraction +
+            INCREMENTO_ESCALADO_REINICIO *
+                static_cast<long double>(reinicios_consecutivos_);
+        // std::min evita que la escalera supere el tope configurado.
+        parametros.fraccion = std::min(config_.restart_fraction, fraccion_escalada);
+        parametros.cuota_mutacion = config_.restart_mutation_share;
+    }
+
+    // El contador se satura en el cap: mas reinicios ya no cambian la
+    // decision y asi no puede desbordar en una corrida larga (ES.103).
+    if (reinicios_consecutivos_ < config_.restart_cap) {
+        reinicios_consecutivos_++;
+    }
+    return parametros;
 }
