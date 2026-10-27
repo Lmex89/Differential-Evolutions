@@ -35,6 +35,7 @@ add_executable(ode-solver
     src/funbobj.cpp
     src/semilla.cpp
     src/salida.cpp
+    src/restart_lifecycle.cpp
     src/parse_tree.cpp
 )
 
@@ -73,6 +74,7 @@ foreach(nombre IN ITEMS test_mutation test_crossover test_token)
         src/semilla.cpp
         src/dualfunctions.cpp
         src/funbobj.cpp
+        src/restart_lifecycle.cpp
         src/parse_tree.cpp
         tests/${nombre}.cpp
     )
@@ -109,6 +111,7 @@ foreach(nombre IN ITEMS test_population test_per_case_config test_restart_escala
         src/semilla.cpp
         src/dualfunctions.cpp
         src/funbobj.cpp
+        src/restart_lifecycle.cpp
         tests/${nombre}.cpp
     )
     target_compile_definitions(${nombre} PRIVATE ODE_NO_MAIN)

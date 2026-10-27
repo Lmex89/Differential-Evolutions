@@ -17,6 +17,7 @@
 #include "semilla.h"
 #include "salida.h"
 #include "token.h"
+#include "restart_lifecycle.h"
 
 using namespace std;
 
@@ -44,107 +45,16 @@ constexpr int POBLACION_MINIMA = 4;
 constexpr int DIMENSION_MINIMA = 1;
 constexpr int GENERACIONES_MINIMAS = 1;
 
-// ModoReinicio: modo de reinicio por estancamiento (issue #126). En Python
-// seria `class ModoReinicio(Enum): LEGACY = "legacy"; ADAPTIVE = "adaptive"`.
-// `legacy` conserva el reinicio historico (`reiniciar_poblacion`); `adaptive`
-// combina la fraccion y la cuota escaladas por #128 con el reinicio elitista
-// de composicion hibrida de #127 (`reiniciar_poblacion_adaptativo`).
-enum class ModoReinicio { legacy, adaptive };
-
 // ConfigBusqueda: los parametros de la corrida en una estructura en vez de
 // argumentos sueltos (regla I.23 de docs/cpp-standards.md: firmas cortas).
 // Los `= valor` son los defaults, como en un dataclass de Python.
-// stale_limit: generaciones sin mejora antes de reiniciar poblacion.
-// restart_fraction: proporcion de individuos que se reemplazan en un reinicio.
-// Los cinco campos siguientes son las claves del reinicio adaptativo
-// (issue #126). El bucle consume `restart_mode`, `restart_min_fraction`,
-// `restart_cap` y `restart_mutation_share` (via el escalador de #128 y la
-// rutina elitista de #127); `div_threshold` se consume en #129.
+// Solo lleva parametros de busqueda (poblacion, dimension, generaciones, warm_start).
+// Los parametros de reinicio viven en ConfigReinicio (issue #166).
 struct ConfigBusqueda {
     int poblacion = POBLACION_DEFECTO;
     int dimension = DIMENSION_DEFECTO;
     int max_generaciones = GENERACIONES_DEFECTO;
     bool warm_start = false;
-    int stale_limit = 500;
-    long double restart_fraction = 0.8L;
-    ModoReinicio restart_mode = ModoReinicio::legacy;
-    long double restart_min_fraction = 0.4L;
-    int restart_cap = 3;
-    long double restart_mutation_share = 0.5L;
-    long double div_threshold = 0.05L;
-};
-
-// Escalado de reinicios (issue #128): cada reinicio consecutivo sin un
-// `new_best` reemplaza una fraccion mayor de la poblacion, hasta el tope
-// ODE_RESTART_FRACTION; tras ODE_RESTART_CAP reinicios sin mejora la rutina
-// pasa a solo refinamiento (fraccion 0.2 y mutaciones de elites). El
-// incremento de 0.2 y los valores del refinamiento son parte del contrato del
-// issue. En Python serian constantes de modulo:
-//     INCREMENTO_ESCALADO_REINICIO = 0.2
-//     FRACCION_REFINAMIENTO = 0.2
-//     CUOTA_MUTACION_REFINAMIENTO = 1.0
-constexpr long double INCREMENTO_ESCALADO_REINICIO = 0.2L;
-constexpr long double FRACCION_REFINAMIENTO = 0.2L;
-constexpr long double CUOTA_MUTACION_REFINAMIENTO = 1.0L;
-
-// ParametrosReinicio: lo que la rutina de reinicio necesita saber para
-// ejecutar el reinicio que toca. `fraccion` es la parte de la poblacion a
-// reemplazar y `cuota_mutacion` la proporcion de reemplazos generados por
-// mutacion de elites (el resto son individuos aleatorios); la cuota la
-// consumen la rutina adaptativa de #127 y el log `restart |`. En Python
-// seria un `@dataclass(frozen=True)` con esos dos campos.
-struct ParametrosReinicio {
-    long double fraccion = 0.0L;
-    long double cuota_mutacion = 0.0L;
-};
-
-// EscaladorReinicio: estado del escalado, propiedad del bucle DE. Sigue el
-// patron de configuracion pura del repo: recibe los valores ya resueltos y
-// devuelve un resultado, sin leer el entorno ni tocar la poblacion. En Python
-// seria una clase con un unico atributo `reinicios_consecutivos` y dos
-// metodos, `consumir_siguiente(config)` y `nuevo_record()`.
-class EscaladorReinicio {
-    public:
-    // consumir_siguiente: devuelve los parametros del proximo reinicio segun
-    // cuantos reinicios consecutivos sin mejora lleva el episodio, y avanza la
-    // escalera (el nombre "consumir" marca ese efecto lateral). La formula es
-    //     min(ODE_RESTART_FRACTION,
-    //         ODE_RESTART_MIN_FRACTION + 0.2 * reinicios_consecutivos)
-    // y, al llegar a ODE_RESTART_CAP, refinamiento-only. En Python seria
-    // `min(config.restart_fraction, config.restart_min_fraction + 0.2 * self.n)`.
-    ParametrosReinicio consumir_siguiente(const ConfigBusqueda& config) {
-        ParametrosReinicio parametros;
-
-        if (reinicios_consecutivos_ >= config.restart_cap) {
-            parametros.fraccion = FRACCION_REFINAMIENTO;
-            parametros.cuota_mutacion = CUOTA_MUTACION_REFINAMIENTO;
-        } else {
-            const long double fraccion_escalada =
-                config.restart_min_fraction +
-                INCREMENTO_ESCALADO_REINICIO *
-                    static_cast<long double>(reinicios_consecutivos_);
-            // std::min evita que la escalera supere el tope configurado.
-            parametros.fraccion = std::min(config.restart_fraction, fraccion_escalada);
-            parametros.cuota_mutacion = config.restart_mutation_share;
-        }
-
-        // El contador se satura en el cap: mas reinicios ya no cambian la
-        // decision y asi no puede desbordar en una corrida larga (ES.103).
-        if (reinicios_consecutivos_ < config.restart_cap) {
-            reinicios_consecutivos_++;
-        }
-        return parametros;
-    }
-
-    // nuevo_record: cualquier `new_best` corta el episodio de estancamiento y
-    // devuelve la escalera al primer reinicio suave (issue #128). En Python
-    // seria `self.reinicios_consecutivos = 0`.
-    void nuevo_record() {
-        reinicios_consecutivos_ = 0;
-    }
-
-    private:
-    int reinicios_consecutivos_ = 0;
 };
 
 // config_entera: lee una variable de entorno ya obtenida con getenv() (en
@@ -243,47 +153,42 @@ DefaultsCaso defaults_por_caso(int caso) {
 // Los defaults por caso (paper practice) son el fallback para pop/dim/gen.
 // Los parametros nuevos van al final con default nullptr: los llamadores que
 // no los pasan (tests viejos incluidos) compilan sin cambios.
-ConfigBusqueda resolver_config(const char* pop_env, const char* dim_env,
-                               const char* gen_env, const char* warm_env,
-                               int caso = 0,
-                               const char* stale_env = nullptr,
-                               const char* fraction_env = nullptr,
-                               const char* restart_mode_env = nullptr,
-                               const char* restart_min_fraction_env = nullptr,
-                               const char* restart_cap_env = nullptr,
-                               const char* restart_mutation_share_env = nullptr,
-                               const char* div_threshold_env = nullptr) {
+// Issue #166: devuelve ambas configuraciones (busqueda y reinicio) por separado.
+void resolver_config(const char* pop_env, const char* dim_env,
+                     const char* gen_env, const char* warm_env,
+                     int caso,
+                     const char* stale_env,
+                     const char* fraction_env,
+                     const char* restart_mode_env,
+                     const char* restart_min_fraction_env,
+                     const char* restart_cap_env,
+                     const char* restart_mutation_share_env,
+                     const char* div_threshold_env,
+                     ConfigBusqueda& config_busqueda,
+                     ConfigReinicio& config_reinicio) {
     DefaultsCaso defaults = defaults_por_caso(caso);
-    ConfigBusqueda config;
-    config.poblacion = config_entera(pop_env, defaults.poblacion, POBLACION_MINIMA);
-    config.dimension = config_entera(dim_env, defaults.dimension, DIMENSION_MINIMA);
-    config.max_generaciones = config_entera(gen_env, defaults.generaciones, GENERACIONES_MINIMAS);
+    
+    // Configuracion de busqueda (poblacion, dimension, generaciones, warm_start).
+    config_busqueda.poblacion = config_entera(pop_env, defaults.poblacion, POBLACION_MINIMA);
+    config_busqueda.dimension = config_entera(dim_env, defaults.dimension, DIMENSION_MINIMA);
+    config_busqueda.max_generaciones = config_entera(gen_env, defaults.generaciones, GENERACIONES_MINIMAS);
 
     // El warm start ya no se limita a la dimension historica de 20 tokens:
     // cada entrada del catalogo se rellena con constantes 1 hasta la dimension
     // configurada (issue #142). Asi los casos 3-5 (dimensiones 25/30) tambien
     // pueden sembrarse y Mutation()/Recombination() siguen emparejando genes
     // por posicion (B5 de REVIEW.md).
-    config.warm_start = config_bandera(warm_env, false);
+    config_busqueda.warm_start = config_bandera(warm_env, false);
 
-    // Parametros de reinicio (issue #108): stale_limit por defecto 500
-    // generaciones, restart_fraction 0.8 (80% de la poblacion). El paper
-    // tunnea estos parametros por caso, pero aqui se controlan via env vars.
-    config.stale_limit = config_entera(stale_env, 500, 1);
-    config.restart_fraction = config_decimal(fraction_env, 0.8L);
-
-    // Claves del reinicio adaptativo (issue #126): se resuelven y se guardan
-    // en la config, pero la busqueda aun no las consume (el reinicio
-    // adaptativo se conecta en los tickets siguientes del #125). Mismo
-    // criterio de fallback que las claves existentes: invalido -> default.
-    // El tope de reinicios usa el minimo 1, igual que stale_limit.
-    config.restart_mode = config_modo_reinicio(restart_mode_env);
-    config.restart_min_fraction = config_decimal(restart_min_fraction_env, 0.4L);
-    config.restart_cap = config_entera(restart_cap_env, 3, 1);
-    config.restart_mutation_share = config_decimal(restart_mutation_share_env, 0.5L);
-    config.div_threshold = config_decimal(div_threshold_env, 0.05L);
-
-    return config;
+    // Configuracion de reinicio (issue #166): solo hechos de stale, modo,
+    // escalacion, mutation-share y Diversity.
+    config_reinicio.stale_limit = config_entera(stale_env, 500, 1);
+    config_reinicio.restart_fraction = config_decimal(fraction_env, 0.8L);
+    config_reinicio.restart_mode = config_modo_reinicio(restart_mode_env);
+    config_reinicio.restart_min_fraction = config_decimal(restart_min_fraction_env, 0.4L);
+    config_reinicio.restart_cap = config_entera(restart_cap_env, 3, 1);
+    config_reinicio.restart_mutation_share = config_decimal(restart_mutation_share_env, 0.5L);
+    config_reinicio.div_threshold = config_decimal(div_threshold_env, 0.05L);
 }
 
 
@@ -656,225 +561,12 @@ int createPopulation(vector<FunbObj>& Population, const ConfigBusqueda& config, 
     return createPopulation(Population, config, caso, catalogo_semillas(caso));
 }
 
-// ResumenDiversidad: resultado puro de mirar las fitness de una generacion.
-// `individuos_finitos` cuenta solo los valores evaluables, `individuos_totales`
-// es el tamano de la muestra y el coeficiente de variacion usa solo los
-// finitos. En Python seria un dataclass con esos tres campos.
-struct ResumenDiversidad {
-    int individuos_finitos = 0;
-    int individuos_totales = 0;
-    long double coeficiente_variacion = 0.0L;
-};
-
-// Proporcion minima de la poblacion que debe tener fitness finita para que el
-// CV sea una senal de diversidad y no el reflejo de unos pocos individuos
-// evaluables (issue #129). En Python seria `FRACCION_MINIMA_FINITA = 0.25`.
-constexpr long double FRACCION_MINIMA_FINITA = 0.25L;
-
-// resumir_diversidad: calcula el coeficiente de variacion (desviacion
-// poblacional / media) sobre las fitness finitas, ignorando INFINITY y NaN.
-// Las fitness no finitas son el contrato documentado del interprete para
-// arboles invalidos, no diversidad real: incluirlas hundiria la media y
-// dispararia reinicios falsos. Si no hay ninguna finita, el resumen queda en
-// cero y el consumidor decide con la guarda de proporcion. En Python seria
-// `finitas = [f for f in fitnesses if math.isfinite(f)]` y luego
-// `statistics.pstdev(finitas) / statistics.mean(finitas)`.
-ResumenDiversidad resumir_diversidad(const vector<ldouble>& fitnesses) {
-    ResumenDiversidad resumen;
-    resumen.individuos_totales = static_cast<int>(fitnesses.size());
-    long double suma = 0.0L;
-
-    for (ldouble fitness : fitnesses) {
-        if (!std::isfinite(fitness)) continue;
-        resumen.individuos_finitos++;
-        suma += fitness;
-    }
-
-    // Sin muestra no hay CV que calcular (0/0); la guarda de la decision
-    // rechaza este caso porque la proporcion finita es cero.
-    if (resumen.individuos_finitos == 0) return resumen;
-
-    const long double media =
-        suma / static_cast<long double>(resumen.individuos_finitos);
-
-    // Las fitness son sumas de cuadrados (no negativas). Una media cero
-    // implica que toda la muestra finita es cero: el colapso es maximo y el
-    // CV se define como 0 para no dividir por cero (ES.105). En Python seria
-    // `cv = pstdev(finitas) / media if media > 0 else 0.0`.
-    if (media <= 0.0L) return resumen;
-
-    long double suma_cuadrados = 0.0L;
-    for (ldouble fitness : fitnesses) {
-        if (!std::isfinite(fitness)) continue;
-        const long double diferencia = fitness - media;
-        suma_cuadrados += diferencia * diferencia;
-    }
-
-    // Desviacion poblacional (divide por n, no por n-1): la muestra ES la
-    // poblacion de esa generacion. En Python: sqrt(suma_cuadrados / n) / media.
-    const long double varianza =
-        suma_cuadrados / static_cast<long double>(resumen.individuos_finitos);
-    resumen.coeficiente_variacion = std::sqrt(varianza) / media;
-    return resumen;
-}
-
-// dispara_reinicio_por_diversidad: decide si el resumen de la generacion
-// activa el reinicio por colapso de diversidad (issue #129). Sin un record
-// finito no hay nada que el reinicio pueda preservar, y la guarda de
-// proporcion evita que unos pocos individuos evaluables disparen el canal.
-// En Python seria
-// `return hay_record and finitos / total >= 0.25 and cv < umbral`.
-bool dispara_reinicio_por_diversidad(const ResumenDiversidad& resumen,
-                                     bool hay_record,
-                                     long double umbral) {
-    if (!hay_record) return false;
-    if (resumen.individuos_totales <= 0) return false;
-
-    const long double proporcion_finita =
-        static_cast<long double>(resumen.individuos_finitos) /
-        static_cast<long double>(resumen.individuos_totales);
-    if (proporcion_finita < FRACCION_MINIMA_FINITA) return false;
-
-    // Comparacion estricta: "cae por debajo del umbral" no incluye tocarlo.
-    return resumen.coeficiente_variacion < umbral;
-}
-
 // -------------------------------------------------------------------------
-// ControlReinicio: ciclo de vida del reinicio (issue #138).
-//
-// Es la costura entre el bucle DE y la decision de reiniciar: main() le
-// entrega los hechos ya calculados de cada generacion y recibe un valor; el
-// modulo no conoce Population/FunbObj, no reemplaza individuos y no registra
-// log. La configuracion de la corrida se copia una sola vez en el constructor
-// para que las llamadas por generacion solo lleven hechos. En Python seria
-// una clase con estado propio (`self.config`) y un metodo `decidir`.
+// Diversity y reinicio ahora en src/restart_lifecycle.{h,cpp} (issue #166).
+// El módulo expone: ResumenDiversidad, resumir_diversidad(), 
+// dispara_reinicio_por_diversidad(), ControlReinicio, DisparadorReinicio,
+// DecisionReinicio, EscaladorReinicio, ModoReinicio.
 // -------------------------------------------------------------------------
-
-// DisparadorReinicio: canal que motivo la decision. `ninguno` es "no
-// reiniciar"; `stale` y `diversity` coinciden con los valores historicos del
-// campo `trigger=` del log (issues #125 y #129). En Python seria un Enum.
-enum class DisparadorReinicio { ninguno, stale, diversity };
-
-// DecisionReinicio: valor devuelto por ControlReinicio::decidir(). El campo
-// `disparador` distingue "no reinicio" de un reinicio real sin usar punteros
-// nulos; `parametros` solo tiene sentido cuando hay reinicio.
-// `generaciones_sin_mejora` lleva la evidencia que el log `restart |` necesita
-// (`stagnant_gens=`): la ventana ya quedo reseteada dentro de decidir(), asi
-// que main() no puede leerla despues. En Python seria un dataclass con
-// `trigger: DisparadorReinicio = NINGUNO`, `parametros` y
-// `generaciones_sin_mejora: int = 0`.
-struct DecisionReinicio {
-    DisparadorReinicio disparador = DisparadorReinicio::ninguno;
-    ParametrosReinicio parametros{};
-    int generaciones_sin_mejora = 0;
-
-    // hay_reinicio: predicado legible para main() y para los tests; evita
-    // comparar contra `ninguno` en cada consumidor. En Python seria
-    // `return self.disparador is not DisparadorReinicio.NINGUNO`.
-    bool hay_reinicio() const {
-        return disparador != DisparadorReinicio::ninguno;
-    }
-};
-
-// ControlReinicio: estado del ciclo de vida de una corrida. La configuracion
-// se guarda por valor y es inmutable (`const`); la ventana de estancamiento,
-// la bandera de record y el escalador se conservan entre generaciones. En
-// Python seria
-// `class ControlReinicio: def __init__(self, config): self.config = config`.
-class ControlReinicio {
-    public:
-    // El constructor recibe la configuracion resuelta una sola vez (issue
-    // #138); no lee el entorno ni modifica la configuracion recibida. En
-    // Python seria `def __init__(self, config: ConfigBusqueda)`.
-    explicit ControlReinicio(const ConfigBusqueda& config) : config_(config) {}
-
-    // decidir: recibe los hechos de una generacion (si hubo `new_best` y el
-    // resumen de diversidad ya calculado) y devuelve la decision (issue #139).
-    // Compone las reglas del ciclo:
-    //   - `new_best` marca que hay record y resetea la ventana y la escalera;
-    //   - al llegar a `stale_limit` dispara `stale` (se evalua antes que
-    //     diversidad, asi que tiene prioridad si ambos canales disparan);
-    //   - solo en adaptive, y si pasan los guards de
-    //     `dispara_reinicio_por_diversidad`, dispara `diversity`;
-    //   - en legacy la diversidad no se evalua y el reinicio usa
-    //     `restart_fraction` sin consumir el escalador;
-    //   - cualquier reinicio resetea la ventana de estancamiento.
-    // En Python seria:
-    //   def decidir(self, nuevo_record, diversidad):
-    //       if nuevo_record:
-    //           self.hay_record = True
-    //           self.generaciones_sin_mejora = 0
-    //           self.escalador.nuevo_record()
-    //       else:
-    //           self.generaciones_sin_mejora += 1
-    //       if self.generaciones_sin_mejora >= self.config.stale_limit:
-    //           return self._reiniciar(STALE)
-    //       if self.config.restart_mode is ADAPTIVE and (
-    //               dispara_reinicio_por_diversidad(
-    //                   diversidad, self.hay_record,
-    //                   self.config.div_threshold)):
-    //           return self._reiniciar(DIVERSITY)
-    //       return DecisionReinicio()
-    DecisionReinicio decidir(bool nuevo_record,
-                             const ResumenDiversidad& diversidad) {
-        // `new_best` es el unico hecho que corta el estancamiento: resetea
-        // tanto la ventana como el episodio de reinicios consecutivos. En
-        // Python: `if nuevo_record: ...; self.escalador.nuevo_record()`.
-        if (nuevo_record) {
-            hay_record_ = true;
-            generaciones_sin_mejora_ = 0;
-            escalador_.nuevo_record();
-        } else {
-            generaciones_sin_mejora_++;
-        }
-
-        // Stale primero: si ambos canales disparan en la misma generacion,
-        // gana el estancamiento y no se encadenan dos reinicios (issue #125).
-        if (generaciones_sin_mejora_ >= config_.stale_limit) {
-            return reiniciar(DisparadorReinicio::stale);
-        }
-
-        // La diversidad solo existe en adaptive (issue #129): en legacy estos
-        // guards ni se evaluan y la corrida historica sigue bit-reproducible.
-        if (config_.restart_mode == ModoReinicio::adaptive &&
-            dispara_reinicio_por_diversidad(diversidad, hay_record_,
-                                            config_.div_threshold)) {
-            return reiniciar(DisparadorReinicio::diversity);
-        }
-
-        // Sin reinicio: ventana por debajo del limite y diversidad sin colapso.
-        return DecisionReinicio{};
-    }
-
-    private:
-    // reiniciar: arma la decision de un reinicio real y resetea la ventana,
-    // que ya cumplio su ciclo. En adaptive consume el siguiente escalon del
-    // escalador; en legacy usa la fraccion configurada y no lo toca, porque
-    // el reinicio historico no escala (issue #139). En Python seria
-    // `def _reiniciar(self, trigger): ...`.
-    DecisionReinicio reiniciar(DisparadorReinicio disparador) {
-        // La evidencia se captura antes del reset: main() la usa para el
-        // campo `stagnant_gens=` del log `restart |`.
-        const int estancadas = generaciones_sin_mejora_;
-        generaciones_sin_mejora_ = 0;
-
-        // El ternario elige una sola rama: `consumir_siguiente` solo avanza la
-        // escalera en adaptive, nunca en legacy. La cuota de legacy no la usa
-        // `reiniciar_poblacion`, pero se informa el valor configurado.
-        const ParametrosReinicio parametros =
-            config_.restart_mode == ModoReinicio::adaptive
-                ? escalador_.consumir_siguiente(config_)
-                : ParametrosReinicio{config_.restart_fraction,
-                                     config_.restart_mutation_share};
-
-        return DecisionReinicio{disparador, parametros, estancadas};
-    }
-
-    const ConfigBusqueda config_;
-    EscaladorReinicio escalador_;
-    int generaciones_sin_mejora_ = 0;
-    bool hay_record_ = false;
-};
 
 // parte_entera: cuantos elementos representa la fraccion `fraccion` de un
 // total `total`, truncando hacia abajo. Es el int(f*n) que el reinicio usa
@@ -890,11 +582,13 @@ int parte_entera(long double fraccion, int total) {
 // indice reservado `indice_record` y no vuelve a tocar ese indice: asi el
 // reinicio no puede perder el record (elitismo real). Devuelve cuantos
 // individuos se reemplazaron, que es el campo `replaced=` del log `restart |`.
+// Issue #166: ahora acepta ambas configuraciones (busqueda y reinicio) por separado.
 // En Python seria
-// `reemplazados = reiniciar_poblacion(poblacion, indice, record, config, caso)`.
+// `reemplazados = reiniciar_poblacion(poblacion, indice, record, config_busqueda, config_reinicio, caso)`.
 int reiniciar_poblacion(vector<FunbObj>& poblacion, int indice_record,
                         const vector<ldouble>& record,
-                        const ConfigBusqueda& config, int caso) {
+                        const ConfigBusqueda& config_busqueda,
+                        const ConfigReinicio& config_reinicio, int caso) {
     // Precondicion: el indice reservado apunta dentro de la poblacion (evita
     // el acceso fuera de rango si un refactor cambia el calculo de `mejor`).
     // En Python seria `assert 0 <= indice_record < len(poblacion)`.
@@ -908,14 +602,14 @@ int reiniciar_poblacion(vector<FunbObj>& poblacion, int indice_record,
         poblacion[indice_record] = FunbObj(record, 0, 1, caso);
     }
 
-    // La fraccion de reemplazo viene de config.restart_fraction (issue #108),
+    // La fraccion de reemplazo viene de config_reinicio.restart_fraction (issue #108),
     // configurable via ODE_RESTART_FRACTION. Antes era hardcoded 0.8.
     const int tam_poblacion = static_cast<int>(poblacion.size());
-    const int cantidad_reemplazar = parte_entera(config.restart_fraction, tam_poblacion);
+    const int cantidad_reemplazar = parte_entera(config_reinicio.restart_fraction, tam_poblacion);
     int reemplazados = 0;
     for (int j = 0; j < tam_poblacion && reemplazados < cantidad_reemplazar; j++){
         if (j != indice_record){
-            poblacion[j] = FunbObj::create_random(config.dimension, caso);
+            poblacion[j] = FunbObj::create_random(config_busqueda.dimension, caso);
             reemplazados++;
         }
     }
@@ -1439,16 +1133,23 @@ int main() {
     // activa con ODE_WARM_START=1 y por defecto la poblacion es aleatoria
     // uniforme, como pide la ecuacion (6) del paper. En Python seria
     // `config = ConfigBusqueda.from_env()` leyendo os.environ.
-    ConfigBusqueda config = resolver_config(getenv("ODE_POP"), getenv("ODE_DIM"),
-                                            getenv("ODE_GEN"), getenv("ODE_WARM_START"),
-                                            caso,
-                                            getenv("ODE_STALE_LIMIT"),
-                                            getenv("ODE_RESTART_FRACTION"),
-                                            getenv("ODE_RESTART_MODE"),
-                                            getenv("ODE_RESTART_MIN_FRACTION"),
-                                            getenv("ODE_RESTART_CAP"),
-                                            getenv("ODE_RESTART_MUTATION_SHARE"),
-                                            getenv("ODE_DIV_THRESHOLD"));
+    // Issue #166: resolver_config devuelve ambas configuraciones por separado.
+    // ConfigBusqueda lleva los parametros de busqueda; ConfigReinicio lleva
+    // solo los hechos de reinicio (stale, modo, escalacion, mutation-share, Diversity).
+    ConfigBusqueda config_busqueda;
+    ConfigReinicio config_reinicio;
+    resolver_config(getenv("ODE_POP"), getenv("ODE_DIM"),
+                    getenv("ODE_GEN"), getenv("ODE_WARM_START"),
+                    caso,
+                    getenv("ODE_STALE_LIMIT"),
+                    getenv("ODE_RESTART_FRACTION"),
+                    getenv("ODE_RESTART_MODE"),
+                    getenv("ODE_RESTART_MIN_FRACTION"),
+                    getenv("ODE_RESTART_CAP"),
+                    getenv("ODE_RESTART_MUTATION_SHARE"),
+                    getenv("ODE_DIV_THRESHOLD"),
+                    config_busqueda,
+                    config_reinicio);
 
     // Una sola poblacion (issue #6): antes habia dos (Population1/Population2)
     // que se cruzaban entre si; DE/rand/1/bin (paper) evoluciona una unica
@@ -1456,7 +1157,7 @@ int main() {
     vector<FunbObj> Population;
     // createPopulation devuelve cuantas entradas del catalogo warm start se
     // inyectaron de verdad; el resto de la poblacion es aleatoria.
-    const int semillas_warm = createPopulation(Population, config, caso);
+    const int semillas_warm = createPopulation(Population, config_busqueda, caso);
 
     // Cr: probabilidad de heredar el gen del mutante en el cruce binomial
     // (eq. (8)). Antes era `int Cr = 85`, un umbral comparado contra el tamano
@@ -1467,20 +1168,20 @@ int main() {
     vector<ldouble> Bestvect;
     int gen = 0;
     bool flag = true;
-    const int max_gen = config.max_generaciones;  // tope del bucle (ODE_GEN)
+    const int max_gen = config_busqueda.max_generaciones;  // tope del bucle (ODE_GEN)
     string estado = "max_generations";  // pasa a "converged" si llega a eps
     
     // Mecanismo de escape de mínimos locales: si la búsqueda no mejora en
     // stale_limit generaciones, se reinicia el restart_fraction de la población
     // manteniendo el mejor individuo. Esto inyecta diversidad fresca sin perder
     // el mejor hallazgo. configurable via ODE_STALE_LIMIT y ODE_RESTART_FRACTION.
-    const int stale_limit = config.stale_limit;
+    const int stale_limit = config_reinicio.stale_limit;
 
     // ControlReinicio (issue #139): el ciclo de vida vive en un solo objeto.
     // main() ya no lleva su propio contador de estancamiento ni su escalador;
     // le pasa a decidir() los hechos de la generacion y obedece la decision.
-    // En Python seria `control_reinicio = ControlReinicio(config)`.
-    ControlReinicio control_reinicio(config);
+    // En Python seria `control_reinicio = ControlReinicio(config_reinicio)`.
+    ControlReinicio control_reinicio(config_reinicio);
 
     // Cabecera de la corrida (reemplaza el banner de ASCII art): una sola
     // linea con toda la configuracion en clave=valor. `population=` informa el
@@ -1494,15 +1195,15 @@ int main() {
     log_info() << "de_run_start | seed=" << semilla
                << " case=" << caso
                << " population=" << Population.size()
-               << " dimension=" << config.dimension
-               << " warm_start=" << (config.warm_start ? 1 : 0)
+               << " dimension=" << config_busqueda.dimension
+               << " warm_start=" << (config_busqueda.warm_start ? 1 : 0)
                << " warm_seeds=" << semillas_warm
                << " cr=" << fmt_fijo(Cr, 2)
                << " fitness_target=" << fmt_ciencia(eps)
                << " max_generations=" << max_gen
                << " stale_limit=" << stale_limit
-               << " restart_fraction=" << fmt_fijo(config.restart_fraction, 2)
-               << " restart_mode=" << nombre_modo_reinicio(config.restart_mode) << '\n';
+               << " restart_fraction=" << fmt_fijo(config_reinicio.restart_fraction, 2)
+               << " restart_mode=" << nombre_modo_reinicio(config_reinicio.restart_mode) << '\n';
 
     // Descripcion legible del caso: el dato maquina es el campo `case=` de
     // arriba; este renglon es la explicacion y va como texto libre (sin
@@ -1600,7 +1301,7 @@ int main() {
         // cacheada por la seleccion y el barrido del mejor. En Python seria
         // `resumen = resumir_diversidad([ind.fitness() for ind in poblacion])`.
         ResumenDiversidad resumen;
-        if (config.restart_mode == ModoReinicio::adaptive){
+        if (config_reinicio.restart_mode == ModoReinicio::adaptive){
             vector<ldouble> fitnesses;
             fitnesses.reserve(Population.size());
             for (const FunbObj& individuo : Population){
@@ -1623,14 +1324,14 @@ int main() {
             int reemplazados = 0;
             const long double fraccion = decision.parametros.fraccion;
             string detalle_restart;
-            if (config.restart_mode == ModoReinicio::adaptive){
+            if (config_reinicio.restart_mode == ModoReinicio::adaptive){
                 // La escalera de #128 ya decidio la fraccion y la cuota de
                 // este reinicio: 0.4 + 0.2 * consecutivos hasta el tope, y
                 // refinamiento-only tras ODE_RESTART_CAP reinicios sin mejora.
                 const ParametrosReinicioAdaptativo parametros{
                     decision.parametros.fraccion,
                     decision.parametros.cuota_mutacion,
-                    config.dimension, caso};
+                    config_busqueda.dimension, caso};
                 reemplazados = reiniciar_poblacion_adaptativo(
                     Population, Bestvect, parametros);
                 detalle_restart = " mutation_share=" +
@@ -1640,7 +1341,7 @@ int main() {
                 // que el reemplazo respeta); ademas el helper restaura alli el
                 // record historico `Bestvect`, porque en una corrida estancada
                 // el mejor del momento no es el record (issue #82).
-                reemplazados = reiniciar_poblacion(Population, mejor, Bestvect, config, caso);
+                reemplazados = reiniciar_poblacion(Population, mejor, Bestvect, config_busqueda, config_reinicio, caso);
             }
             // Una sola linea `restart |` para ambos modos: `trigger=` y
             // `fraction=` dejan auditable que disparo el reinicio y con que
