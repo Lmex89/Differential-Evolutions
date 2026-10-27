@@ -1,4 +1,4 @@
-// test_restart_lifecycle.cpp — tests del ciclo de vida de reinicios (issues #139 y #167).
+// test_restart_lifecycle.cpp — tests del ciclo de vida de reinicios (issues #139, #167 y #168).
 //
 // El issue #138 definio la costura entre el bucle DE y la decision de reinicio:
 // ControlReinicio recibe la configuracion inmutable una sola vez y, por
@@ -11,16 +11,23 @@
 // adaptive), la prioridad de stale, el reset por `new_best`, la supresion
 // legacy y el refinamiento tras el cap.
 //
+// Desde el issue #168 la costura del modulo incluye tambien el reemplazo
+// legacy: `reiniciar_poblacion` recibe la poblacion nativa y no la
+// configuracion de busqueda (la dimension se derive de la poblacion).
+//
 // Se compila con el modulo restart_lifecycle.cpp; el test cruza la costura del
 // modulo sin incluir parse_tree.cpp. En Python seria
-// `from restart_lifecycle import ControlReinicio, DecisionReinicio`.
+// `from restart_lifecycle import ControlReinicio, reiniciar_poblacion`.
 
 #include <iostream>
 #include <string>
 #include <vector>
 #include <cmath>
+#include <cstdlib>
 
 #include "restart_lifecycle.h"
+#include "funbobj.h"   // FunbObj: los tests de reemplazo construyen individuos
+#include "token.h"     // TOKEN_MUL/TOKEN_CONST*/TOKEN_X del fixture legacy
 
 // -------------------------------------------------------------------------
 // Arnes minimo (mismo estilo que test_restart_escalation.cpp).
@@ -44,6 +51,20 @@ static void check_decimal(const std::string& nombre, long double recibido,
     const long double epsilon = 1e-9L;
     g_checks++;
     if (std::abs(recibido - esperado) < epsilon) {
+        std::cout << "PASS  " << nombre << "\n";
+    } else {
+        std::cout << "FAIL  " << nombre << "  (got=" << recibido
+                  << " esperado=" << esperado << ")\n";
+        g_fallos++;
+    }
+}
+
+// check_int: igualdad exacta para conteos enteros (reemplazados/tamano),
+// mismo estilo que test_diversity_trigger.cpp. En Python seria
+// `assert recibido == esperado`.
+static void check_int(const std::string& nombre, int recibido, int esperado) {
+    g_checks++;
+    if (recibido == esperado) {
         std::cout << "PASS  " << nombre << "\n";
     } else {
         std::cout << "FAIL  " << nombre << "  (got=" << recibido
@@ -447,6 +468,121 @@ static void test_refinamiento_despues_del_cap() {
     check_decimal("cuarto reinicio: mutation_share 1.0", r4.parametros.cuota_mutacion, 1.0L);
 }
 
+// -------------------------------------------------------------------------
+// Seam (issue #168): reemplazo legacy de la poblacion detras de la costura del
+// modulo. `reiniciar_poblacion` recibe la poblacion nativa, el indice
+// reservado, el record historico y la configuracion de reinicio; la dimension
+// de los reemplazos se derive de la poblacion (no cruza config de busqueda).
+// En Python seria
+// `reemplazados = reiniciar_poblacion(poblacion, indice, record, config)`.
+// -------------------------------------------------------------------------
+
+// poblacion_legacy: individuos {TOKEN_MUL, k, TOKEN_X} (= k*x) con constantes
+// distintas, para contar por vector quienes cambian sin evaluar fitness. La
+// dimension 3 es deliberadamente distinta de la dimension por defecto (20):
+// si el reemplazo no derivara la dimension de la poblacion, los tests lo
+// verian aqui. En Python seria
+// `[FunbObj([TOKEN_MUL, k, TOKEN_X], 0, 1, 0) for k in constantes]`.
+static std::vector<FunbObj> poblacion_legacy(const std::vector<int>& constantes) {
+    std::vector<FunbObj> poblacion;
+    for (size_t i = 0; i < constantes.size(); i++) {
+        poblacion.push_back(FunbObj(
+            std::vector<ldouble>{static_cast<ldouble>(TOKEN_MUL),
+                                 static_cast<ldouble>(constantes[i]),
+                                 static_cast<ldouble>(TOKEN_X)},
+            0, 1, 0));
+    }
+    return poblacion;
+}
+
+// Atrapa: que el reemplazo legacy no respete la fraccion configurada, que
+// cambie el tamano de la poblacion o que use una dimension distinta a la de
+// la poblacion que recibe.
+static void test_reinicio_legacy_reemplaza_la_fraccion() {
+    srand(20261013);
+
+    // 15 individuos: con la fraccion por defecto 0.8, int(0.8*15) = 12, el
+    // mismo criterio que la linea del log `replaced=12`.
+    std::vector<FunbObj> poblacion = poblacion_legacy(
+        {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15});
+
+    std::vector<std::vector<ldouble>> antes;
+    for (size_t i = 0; i < poblacion.size(); i++) {
+        antes.push_back(poblacion[i].vecvalue());
+    }
+
+    const int indice_record = 3;
+    const std::vector<ldouble> record = poblacion[indice_record].vecvalue();
+
+    const ConfigReinicio config;  // restart_fraction = 0.8 por defecto
+    const int reemplazados =
+        reiniciar_poblacion(poblacion, indice_record, record, config, 0);
+
+    check_int("legacy reemplaza el 80% de la poblacion (12 de 15)",
+              reemplazados, 12);
+    check_int("legacy conserva el tamano de la poblacion",
+              static_cast<int>(poblacion.size()), 15);
+
+    // Con el record igual al vector del indice reservado, solo los
+    // reemplazados cambian de vector. srand fijo: el sorteo es determinista.
+    int cambiados = 0;
+    bool dimension_ok = true;
+    for (size_t i = 0; i < poblacion.size(); i++) {
+        if (poblacion[i].vecvalue() != antes[i]) cambiados++;
+        if (poblacion[i].vecvalue().size() != antes[i].size())
+            dimension_ok = false;
+    }
+    check_int("solo los reemplazados cambian de vector", cambiados,
+              reemplazados);
+    check_bool("los reemplazos conservan la dimension de la poblacion",
+               dimension_ok);
+}
+
+// Atrapa: que el record historico no vuelva al indice reservado (elitismo).
+static void test_reinicio_legacy_restaura_el_record() {
+    srand(20261013);
+
+    std::vector<FunbObj> poblacion =
+        poblacion_legacy({1, 2, 3, 4, 5, 6, 7, 8, 9, 10});
+
+    // Record simulado: un vector fijo distinto del individuo que hoy ocupa el
+    // indice reservado (en una corrida estancada el mejor de la generacion no
+    // es el record, que suele vivir en otro indice).
+    const std::vector<ldouble> record = {18, 13, 17, 11};
+    const int indice_record = 4;
+    check_bool("el record simulado no es el individuo del indice reservado",
+               poblacion[indice_record].vecvalue() != record);
+
+    const ConfigReinicio config;  // restart_fraction = 0.8 por defecto
+    reiniciar_poblacion(poblacion, indice_record, record, config, 0);
+
+    check_bool("el indice reservado contiene exactamente el record restaurado",
+               poblacion[indice_record].vecvalue() == record);
+}
+
+// Atrapa: con un record vacio (la corrida nunca encontro fitness finito) no
+// hay nada que restaurar, pero la fraccion de reemplazo sigue aplicandose y
+// el indice reservado no se toca.
+static void test_reinicio_legacy_sin_record_no_toca_el_indice_reservado() {
+    srand(20261013);
+
+    std::vector<FunbObj> poblacion =
+        poblacion_legacy({1, 2, 3, 4, 5, 6, 7, 8, 9, 10});
+
+    const int indice_record = 5;
+    const std::vector<ldouble> original = poblacion[indice_record].vecvalue();
+    const std::vector<ldouble> sin_record;
+
+    const ConfigReinicio config;  // restart_fraction = 0.8 por defecto
+    const int reemplazados =
+        reiniciar_poblacion(poblacion, indice_record, sin_record, config, 0);
+
+    check_int("sin record legacy sigue reemplazando el 80% (8 de 10)",
+              reemplazados, 8);
+    check_bool("sin record el indice reservado queda intacto",
+               poblacion[indice_record].vecvalue() == original);
+}
+
 int main() {
     std::cout << "== test_restart_lifecycle: issue #139 (ciclo de vida de ControlReinicio) ==\n";
     test_primera_generacion_sin_reinicio();
@@ -461,6 +597,9 @@ int main() {
     test_legacy_no_consume_el_escalador();
     test_stale_tiene_prioridad_sobre_diversity();
     test_refinamiento_despues_del_cap();
+    test_reinicio_legacy_reemplaza_la_fraccion();
+    test_reinicio_legacy_restaura_el_record();
+    test_reinicio_legacy_sin_record_no_toca_el_indice_reservado();
     std::cout << (g_fallos == 0 ? "OK" : "FALLARON") << ": "
               << (g_checks - g_fallos) << "/" << g_checks << " asserts\n";
     return g_fallos == 0 ? 0 : 1;

@@ -143,15 +143,21 @@
   vocabulary, arity, rendering, and random-token source of truth.
   `docs/legacy/parse_tree_bckp.cpp` is a historical copy that also defines
   `main()`: never add it to a build.
-- `src/restart_lifecycle.{h,cpp}` (issues #166/#167) owns the restart
+- `src/restart_lifecycle.{h,cpp}` (issues #166/#167/#168) owns the restart
   lifecycle: the restart-only configuration, the legacy/adaptive vocabulary,
   the Diversity summary and its trigger, the stale window, the escalation
-  ladder and the decision itself. The DE loop drives generations, discovers and
-  updates the all-time record, and applies the decision; it does not decide
-  whether Diversity is evaluated or which escalation step applies. The seam is
+  ladder, the decision itself, and the legacy population replacement
+  (`reiniciar_poblacion` with its `parte_entera` truncation), which derives the
+  replacement dimension from the Population so the search configuration never
+  crosses the seam. The DE loop drives generations, discovers and
+  updates the all-time record, and applies the replacement; it does not decide
+  whether Diversity is evaluated or which escalation step applies. The decision
+  seam is
   `ControlReinicio::decidir(nuevo_record, fitnesses)`: the loop passes the
   generation evidence (whether a new best appeared and the population's
-  fitness values) and the module returns the decision. The escalation ladder is
+  fitness values) and the module returns the decision; the replacement seam is
+  the free function `reiniciar_poblacion(poblacion, indice, record, config,
+  caso)`. The escalation ladder is
   private to the module: do not expose it again as a collaborator.
 - `src/salida.{h,cpp}` owns the output destination: `resolver_salida()` maps
   `ODE_LOG`/`ODE_LOG_FILE` to a mode and path, and `RedireccionSalida` is the
@@ -173,7 +179,9 @@
 - The three restart-lifecycle tests (`tests/test_restart_lifecycle.cpp`,
   `tests/test_restart_escalation.cpp`, `tests/test_diversity_trigger.cpp`)
   cross the module interface: they include `restart_lifecycle.h` and link
-  `src/restart_lifecycle.cpp` without `parse_tree.cpp` (issue #167).
+  `src/restart_lifecycle.cpp` without `parse_tree.cpp` (issues #167/#168;
+  `test_restart_lifecycle` also carries the legacy replacement evidence and
+  therefore links `src/funbobj.cpp` for `FunbObj`).
 - `tests/test_header_hygiene.cpp` includes `funbobj.h` to keep the module
   interface self-contained.
 - Interpreter operand blanking to `NAN` is deliberate. Invalid/incomplete or
