@@ -1,23 +1,19 @@
-// test_restart_escalation.cpp — tests del escalado de reinicios (issue #128).
+// test_restart_escalation.cpp — tests del escalado de reinicios (issues #128 y #167).
 //
 // El issue #128 pide que los reinicios consecutivos sin un `new_best` crezcan
 // su fraccion de reemplazo (0.4 -> 0.6 -> 0.8) y que, tras agotar
 // ODE_RESTART_CAP, el reinicio degenere a solo refinamiento (fraccion 0.2 y
 // cuota de mutacion 1.0). Cualquier `new_best` reinicia la escalera.
 //
-// Se compila con -DODE_NO_MAIN y junto con dualfunctions.cpp y semilla.cpp;
-// parse_tree.cpp se incluye mas abajo (FunbObj no tiene header), el mismo
-// patron que test_population.cpp. En Python seria
-// `from parse_tree import EscaladorReinicio, ConfigReinicio`.
+// Se compila con el modulo restart_lifecycle.cpp; el test cruza la costura del
+// modulo sin incluir parse_tree.cpp. En Python seria
+// `from restart_lifecycle import EscaladorReinicio, ConfigReinicio`.
 
 #include <iostream>
 #include <string>
 #include <cmath>
 
-#include "dualfunctions.h"
-#include "token.h"
-
-#include "parse_tree.cpp"
+#include "restart_lifecycle.h"
 
 // -------------------------------------------------------------------------
 // Arnes minimo (mismo estilo que test_population.cpp).
