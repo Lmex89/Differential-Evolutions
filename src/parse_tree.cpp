@@ -562,62 +562,19 @@ int createPopulation(vector<FunbObj>& Population, const ConfigBusqueda& config, 
 }
 
 // -------------------------------------------------------------------------
-// Diversity y reinicio ahora en src/restart_lifecycle.{h,cpp} (issue #166).
+// Diversity y reinicio ahora en src/restart_lifecycle.{h,cpp} (issues #166,
+// #167 y #168).
 // El módulo expone: ResumenDiversidad, resumir_diversidad(), 
 // dispara_reinicio_por_diversidad(), ControlReinicio, DisparadorReinicio,
-// DecisionReinicio, ModoReinicio.
+// DecisionReinicio, ModoReinicio, parte_entera() y reiniciar_poblacion().
 // Desde el issue #167 la decision se pide con la evidencia de la generacion:
 // el bucle DE entrega los fitness de la poblacion y el modulo calcula el
-// resumen de diversidad y devuelve la decision.
+// resumen de diversidad y devuelve la decision. Desde el issue #168 el
+// reemplazo legacy tambien vive en el modulo: la dimension de los
+// reemplazos se derive de la poblacion, asi que la configuracion de
+// busqueda ya no cruza la costura del reinicio. En Python seria
+// `from restart_lifecycle import reiniciar_poblacion, parte_entera`.
 // -------------------------------------------------------------------------
-
-// parte_entera: cuantos elementos representa la fraccion `fraccion` de un
-// total `total`, truncando hacia abajo. Es el int(f*n) que el reinicio usa
-// tanto para la fraccion de reemplazo como para la cuota de mutacion, en un
-// solo lugar. En Python seria `int(fraccion * total)`.
-int parte_entera(long double fraccion, int total) {
-    return static_cast<int>(fraccion * total);
-}
-
-// reiniciar_poblacion: mecanismo de escape de minimos locales (issue #82).
-// Reemplaza el 80% de la poblacion con individuos aleatorios frescos para
-// inyectar diversidad, pero antes restaura el mejor historico `record` en el
-// indice reservado `indice_record` y no vuelve a tocar ese indice: asi el
-// reinicio no puede perder el record (elitismo real). Devuelve cuantos
-// individuos se reemplazaron, que es el campo `replaced=` del log `restart |`.
-// Issue #166: ahora acepta ambas configuraciones (busqueda y reinicio) por separado.
-// En Python seria
-// `reemplazados = reiniciar_poblacion(poblacion, indice, record, config_busqueda, config_reinicio, caso)`.
-int reiniciar_poblacion(vector<FunbObj>& poblacion, int indice_record,
-                        const vector<ldouble>& record,
-                        const ConfigBusqueda& config_busqueda,
-                        const ConfigReinicio& config_reinicio, int caso) {
-    // Precondicion: el indice reservado apunta dentro de la poblacion (evita
-    // el acceso fuera de rango si un refactor cambia el calculo de `mejor`).
-    // En Python seria `assert 0 <= indice_record < len(poblacion)`.
-    assert(indice_record >= 0 && indice_record < static_cast<int>(poblacion.size()));
-
-    // Elitismo: el record entra al indice reservado ANTES del barrido, para
-    // que el bucle (que salta `indice_record`) lo deje intacto. Un `record`
-    // vacio significa que la corrida nunca encontro un fitness finito: no hay
-    // nada que restaurar y el indice queda como estaba.
-    if (!record.empty()){
-        poblacion[indice_record] = FunbObj(record, 0, 1, caso);
-    }
-
-    // La fraccion de reemplazo viene de config_reinicio.restart_fraction (issue #108),
-    // configurable via ODE_RESTART_FRACTION. Antes era hardcoded 0.8.
-    const int tam_poblacion = static_cast<int>(poblacion.size());
-    const int cantidad_reemplazar = parte_entera(config_reinicio.restart_fraction, tam_poblacion);
-    int reemplazados = 0;
-    for (int j = 0; j < tam_poblacion && reemplazados < cantidad_reemplazar; j++){
-        if (j != indice_record){
-            poblacion[j] = FunbObj::create_random(config_busqueda.dimension, caso);
-            reemplazados++;
-        }
-    }
-    return reemplazados;
-}
 
 // ParametrosReinicioAdaptativo: opciones de un reinicio adaptativo puntual
 // (issue #127). Es un struct para no seguir sumando argumentos sueltos a la
@@ -1347,7 +1304,7 @@ int main() {
                 // que el reemplazo respeta); ademas el helper restaura alli el
                 // record historico `Bestvect`, porque en una corrida estancada
                 // el mejor del momento no es el record (issue #82).
-                reemplazados = reiniciar_poblacion(Population, mejor, Bestvect, config_busqueda, config_reinicio, caso);
+                reemplazados = reiniciar_poblacion(Population, mejor, Bestvect, config_reinicio, caso);
             }
             // Una sola linea `restart |` para ambos modos: `trigger=` y
             // `fraction=` dejan auditable que disparo el reinicio y con que

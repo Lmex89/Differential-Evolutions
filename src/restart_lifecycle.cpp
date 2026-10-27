@@ -7,6 +7,7 @@
 #include "restart_lifecycle.h"
 
 #include <algorithm>
+#include <cassert>
 
 // -------------------------------------------------------------------------
 // ResumenDiversidad y disparador.
@@ -148,4 +149,64 @@ ParametrosReinicio ControlReinicio::consumir_siguiente() {
         reinicios_consecutivos_++;
     }
     return parametros;
+}
+
+// -------------------------------------------------------------------------
+// Reemplazo legacy de la poblacion (issues #82/#168). Movido tal cual desde
+// parse_tree.cpp, salvo la dimension, que ahora se derive de la poblacion
+// para no cruzar la costura con la configuracion de busqueda.
+// -------------------------------------------------------------------------
+
+int parte_entera(long double fraccion, int total) {
+    return static_cast<int>(fraccion * total);
+}
+
+// reiniciar_poblacion: mecanismo de escape de minimos locales. Reemplaza la
+// fraccion configurada de la poblacion con individuos aleatorios frescos para
+// inyectar diversidad, pero antes restaura el mejor historico `record` en el
+// indice reservado `indice_record` y no vuelve a tocar ese indice: asi el
+// reinicio no puede perder el record (elitismo real). Devuelve cuantos
+// individuos se reemplazaron, que es el campo `replaced=` del log `restart |`.
+// En Python seria
+// `reemplazados = reiniciar_poblacion(poblacion, indice, record, config, caso)`.
+int reiniciar_poblacion(std::vector<FunbObj>& poblacion, int indice_record,
+                        const std::vector<ldouble>& record,
+                        const ConfigReinicio& config, int caso) {
+    // Precondicion: el indice reservado apunta dentro de la poblacion (evita
+    // el acceso fuera de rango si un refactor cambia el calculo de `mejor`).
+    // En Python seria `assert 0 <= indice_record < len(poblacion)`.
+    assert(indice_record >= 0 && indice_record < static_cast<int>(poblacion.size()));
+
+    // Dimension de los reemplazos derivada de la poblacion: es la invariante
+    // de la costura (poblacion no vacia con dimension uniforme) y equivale a
+    // la dimension configurada de la corrida, asi que el sorteo de
+    // create_random consume rand() exactamente igual que antes. En Python:
+    // `dimension = len(poblacion[0])`.
+    const int dimension = static_cast<int>(poblacion[0].vecvalue().size());
+    // La uniformidad no se asume a ciegas: una poblacion mixta haria que unos
+    // reemplazos salieran con otra dimension que los sobrevivientes.
+    for (const FunbObj& individuo : poblacion) {
+        assert(static_cast<int>(individuo.vecvalue().size()) == dimension);
+    }
+
+    // Elitismo: el record entra al indice reservado ANTES del barrido, para
+    // que el bucle (que salta `indice_record`) lo deje intacto. Un `record`
+    // vacio significa que la corrida nunca encontro un fitness finito: no hay
+    // nada que restaurar y el indice queda como estaba.
+    if (!record.empty()){
+        poblacion[indice_record] = FunbObj(record, 0, 1, caso);
+    }
+
+    // La fraccion de reemplazo viene de config.restart_fraction (issue #108),
+    // configurable via ODE_RESTART_FRACTION. Antes era hardcoded 0.8.
+    const int tam_poblacion = static_cast<int>(poblacion.size());
+    const int cantidad_reemplazar = parte_entera(config.restart_fraction, tam_poblacion);
+    int reemplazados = 0;
+    for (int j = 0; j < tam_poblacion && reemplazados < cantidad_reemplazar; j++){
+        if (j != indice_record){
+            poblacion[j] = FunbObj::create_random(dimension, caso);
+            reemplazados++;
+        }
+    }
+    return reemplazados;
 }

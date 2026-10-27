@@ -14,6 +14,8 @@
 #include <vector>
 #include <cmath>
 
+#include "funbobj.h"  // FunbObj: el reemplazo legacy trabaja sobre la poblacion nativa
+
 // ldouble es el alias de long double usado en todo el proyecto. En Python
 // no existe este detalle (float es doble precision siempre).
 using ldouble = long double;
@@ -164,5 +166,29 @@ private:
     int reinicios_consecutivos_ = 0;  // escalera de escalado (#128)
     bool hay_record_ = false;
 };
+
+// -------------------------------------------------------------------------
+// parte_entera: cuantos elementos representa la fraccion `fraccion` de un
+// total `total`, truncando hacia abajo. Es el int(f*n) que el reemplazo usa
+// tanto para la fraccion legacy como para la cuota de mutacion adaptativa,
+// en un solo lugar (vivía en parse_tree.cpp; el issue #168 lo trae al modulo
+// porque el reemplazo legacy ahora vive aqui). En Python: `int(fraccion * total)`.
+int parte_entera(long double fraccion, int total);
+
+// -------------------------------------------------------------------------
+// reiniciar_poblacion: reemplazo legacy detras de la costura del modulo
+// (issues #82/#168). Restaura el mejor historico `record` en el indice
+// reservado y no vuelve a tocar ese indice (elitismo real), luego reemplaza
+// int(restart_fraction * tam) indices con individuos aleatorios frescos de
+// FunbObj::create_random. La dimension sale de la propia poblacion (invariante
+// de la costura: poblacion no vacia con dimension uniforme), asi la
+// configuracion de busqueda no cruza el modulo. Devuelve los reemplazados,
+// que es el campo `replaced=` del log `restart |` (kept = tamano - reemplazados).
+// El orden de llamadas a rand() es identico al historico: corridas legacy con
+// semilla fija siguen siendo bit-reproducibles. En Python seria
+// `reemplazados = reiniciar_poblacion(poblacion, indice, record, config, caso)`.
+int reiniciar_poblacion(std::vector<FunbObj>& poblacion, int indice_record,
+                        const std::vector<ldouble>& record,
+                        const ConfigReinicio& config, int caso);
 
 #endif // RESTART_LIFECYCLE_H
