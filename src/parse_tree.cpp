@@ -569,168 +569,10 @@ int createPopulation(vector<FunbObj>& Population, const ConfigBusqueda& config, 
 // DecisionReinicio, ModoReinicio, parte_entera() y reiniciar_poblacion().
 // Desde el issue #167 la decision se pide con la evidencia de la generacion:
 // el bucle DE entrega los fitness de la poblacion y el modulo calcula el
-// resumen de diversidad y devuelve la decision. Desde el issue #168 el
-// reemplazo legacy tambien vive en el modulo: la dimension de los
-// reemplazos se derive de la poblacion, asi que la configuracion de
-// busqueda ya no cruza la costura del reinicio. En Python seria
-// `from restart_lifecycle import reiniciar_poblacion, parte_entera`.
+// resumen de diversidad y devuelve la decision. Los reemplazos legacy y
+// adaptativo viven en el modulo y derivan su dimension de la poblacion.
+// En Python seria `from restart_lifecycle import reiniciar_poblacion`.
 // -------------------------------------------------------------------------
-
-// ParametrosReinicioAdaptativo: opciones de un reinicio adaptativo puntual
-// (issue #127). Es un struct para no seguir sumando argumentos sueltos a la
-// rutina (regla I.23 de docs/cpp-standards.md: `FunbObj(vecval, start, stop,
-// caso)` ya esta en el limite). `fraccion` y `cuota_mutacion` viajan por
-// reinicio porque el issue #128 las escala entre reinicios consecutivos;
-// `dimension` y `caso` los comparte toda la corrida. Los cuatro campos son
-// obligatorios (sin `= valor`): unos defaults aqui duplicarian los de
-// ConfigBusqueda/resolver_config (regla ES.45) y todo llamador los pasa.
-struct ParametrosReinicioAdaptativo {
-    long double fraccion;        // parte de la poblacion que se reemplaza
-    long double cuota_mutacion;  // parte de los reemplazos que muta elites
-    int dimension;               // longitud de los uniformes nuevos
-    int caso;                    // ODE que evalua fitness()
-};
-
-// Cuantos tokens puede tocar una mutacion puntual: entre 1 y 2 (issue #127).
-constexpr int CAMBIOS_PUNTUALES_MIN = 1;
-constexpr int CAMBIOS_PUNTUALES_MAX = 2;
-
-// mutacion_puntual_en: nucleo puro del refinamiento local (issue #127): copia
-// `base` y escribe `token` en `posicion`. Sin rand(), como mutacion_rand1: la
-// sustitucion se puede probar con valores a mano, y el sorteo de posiciones y
-// tokens vive en su driver mutacion_puntual. En Python seria
-// `copia = list(base); copia[posicion] = token; return copia`.
-vector<ldouble> mutacion_puntual_en(const vector<ldouble>& base, int posicion, int token){
-    vector<ldouble> copia(base);
-    copia[posicion] = token;
-    return copia;
-}
-
-// mutacion_puntual: driver aleatorio: copia `base` (el vector de un elite) y
-// sustituye 1 o 2 posiciones al azar por tokens nuevos distintos de los que
-// habia, de modo que el cambio sea exactamente de 1-2 tokens y la longitud se
-// conserve. Es la mutacion de refinamiento local del reinicio adaptativo
-// (issue #127), no la mutacion DE/rand/1 del paper. En Python seria
-// `copia = list(base); posiciones = random.sample(range(len(copia)), 1 + random.randint(0, 1)); ...`.
-vector<ldouble> mutacion_puntual(const vector<ldouble>& base){
-    const int n = static_cast<int>(base.size());
-    if (n == 0) return base;
-
-    // 1 o 2 cambios, nunca mas posiciones que tokens tiene el vector.
-    int cambios = CAMBIOS_PUNTUALES_MIN +
-                  rand() % (CAMBIOS_PUNTUALES_MAX - CAMBIOS_PUNTUALES_MIN + 1);
-    if (cambios > n) cambios = n;
-
-    // Primera posicion al azar y token nuevo distinto del anterior. El
-    // do-while es como el de indices_distintos: el alfabeto tiene 29 tokens
-    // (token.h), asi que el reintento termina (no hay bucle infinito posible).
-    // Los tokens viven como long double en el vector (el tipo comun de la
-    // representacion); cada token es un codigo entero, de ahi el static_cast
-    // al compararlos.
-    vector<ldouble> copia(base);
-    const int primera = rand() % n;
-    int nuevo = 0;
-    do { nuevo = random_token(); } while (nuevo == static_cast<int>(copia[primera]));
-    copia = mutacion_puntual_en(copia, primera, nuevo);
-
-    if (cambios == CAMBIOS_PUNTUALES_MAX){
-        // Segunda posicion distinta de la primera: se sortea sobre n-1 y se
-        // corre un lugar si cayo a la derecha de la primera (evita el bucle
-        // de rechazo y consume exactamente un rand()).
-        int segunda = rand() % (n - 1);
-        if (segunda >= primera) segunda++;
-        do { nuevo = random_token(); } while (nuevo == static_cast<int>(copia[segunda]));
-        copia = mutacion_puntual_en(copia, segunda, nuevo);
-    }
-
-    return copia;
-}
-
-// reiniciar_poblacion_adaptativo: reinicio por estancamiento del modo
-// adaptativo (issue #127). A diferencia del legacy, ordena la poblacion por
-// fitness y reemplaza SOLO a los peores `fraccion`, de modo que los
-// sobrevivientes son los individuos realmente mas aptos y ninguno de ellos se
-// toca. Devuelve cuantos lugares se reemplazaron (el campo `replaced=` del log
-// `restart |`; los que inyecto el record incluidos), asi que
-// `kept = tam - devuelto` cuenta sobrevivientes intactos. `parametros` trae la
-// fraccion, la cuota de mutacion, la longitud de los individuos uniformes y el
-// caso de la ODE (ver ParametrosReinicioAdaptativo). El reinicio legacy
-// conserva su firma y su comportamiento.
-// En Python seria
-// `reemplazados = reiniciar_poblacion_adaptativo(poblacion, record, parametros)`.
-int reiniciar_poblacion_adaptativo(vector<FunbObj>& poblacion,
-                                   const vector<ldouble>& record,
-                                   const ParametrosReinicioAdaptativo& parametros) {
-    const int tam = static_cast<int>(poblacion.size());
-
-    // Orden estable por fitness (menor = mejor). stable_sort conserva el orden
-    // original en los empates: con la misma semilla se eligen los mismos
-    // indices. En Python seria
-    // `orden = sorted(range(tam), key=lambda i: poblacion[i].fitness())`.
-    vector<int> orden(tam);
-    for (int i = 0; i < tam; i++) orden[i] = i;
-    stable_sort(orden.begin(), orden.end(), [&poblacion](int a, int b){
-        return poblacion[a].fitness() < poblacion[b].fitness();
-    });
-
-    // Cuantos se reemplazan: la fraccion truncada igual que en el reinicio
-    // legacy (parte_entera), pero se deja siempre al menos un sobreviviente
-    // (el mejor/record) aunque `parametros.fraccion` llegue a 1.
-    int cantidad = parte_entera(parametros.fraccion, tam);
-    if (cantidad > tam - 1) cantidad = tam - 1;
-    if (cantidad < 0) cantidad = 0;
-    int conservados = tam - cantidad;
-
-    // El record (mejor historico) sobrevive siempre. Si su vector ya esta
-    // entre los conservados no se toca (no se duplica); si no, ocupa el
-    // primero de los lugares que se reemplazan, de modo que ningun
-    // sobreviviente se toca y `kept=`/`replaced=` describen exactamente lo que
-    // paso (el lugar del record cuenta como reemplazo). Un record vacio (la
-    // corrida nunca encontro fitness finito) no se inyecta. En Python seria
-    // `inyectar = record and not any(p.vecvalue() == record for p in conservados)`.
-    bool record_presente = false;
-    if (!record.empty()){
-        for (int k = 0; k < conservados && !record_presente; k++){
-            if (poblacion[orden[k]].vecvalue() == record) record_presente = true;
-        }
-    }
-    const bool inyectar = !record.empty() && !record_presente && tam > 0;
-
-    // Borde: si la fraccion trunco a cero no hay lugar de reemplazo, pero el
-    // record ausente necesita uno; se le abre el del peor y esa sustitucion
-    // cuenta como reemplazo (el log no puede informar replaced=0 y a la vez
-    // haber cambiado un individuo).
-    if (inyectar && cantidad == 0){
-        cantidad = 1;
-        conservados = tam - cantidad;
-    }
-
-    // Composicion hibrida (issue #127): el record (si hay que inyectarlo)
-    // ocupa el primer lugar reemplazado; despues van las mutaciones puntuales
-    // de 1-2 tokens de un sobreviviente (refinamiento local alrededor de las
-    // elites) en la cuota `parametros.cuota_mutacion` y los uniformes nuevos
-    // (exploracion) completan el resto. El reparto se trunca igual que la
-    // fraccion. En Python seria
-    // `mutaciones = int(cuota_mutacion * (cantidad - inyectar))`.
-    const int plazas_record = inyectar ? 1 : 0;
-    const int mutaciones = parte_entera(parametros.cuota_mutacion,
-                                        cantidad - plazas_record);
-    for (int k = conservados; k < tam; k++){
-        const int lugar = k - conservados;
-        if (lugar < plazas_record){
-            poblacion[orden[k]] = FunbObj(record, 0, 1, parametros.caso);
-        } else if (lugar - plazas_record < mutaciones){
-            const vector<ldouble> elite =
-                poblacion[orden[rand() % conservados]].vecvalue();
-            poblacion[orden[k]] = FunbObj(mutacion_puntual(elite), 0, 1, parametros.caso);
-        } else {
-            poblacion[orden[k]] = FunbObj::create_random(parametros.dimension, parametros.caso);
-        }
-    }
-
-    return cantidad;
-}
-
 
 // mutacion_rand1: nucleo de la mutacion DE/rand/1/bin, ecuacion (7) del paper:
 //
@@ -1291,12 +1133,8 @@ int main() {
                 // La escalera de #128 ya decidio la fraccion y la cuota de
                 // este reinicio: 0.4 + 0.2 * consecutivos hasta el tope, y
                 // refinamiento-only tras ODE_RESTART_CAP reinicios sin mejora.
-                const ParametrosReinicioAdaptativo parametros{
-                    decision.parametros.fraccion,
-                    decision.parametros.cuota_mutacion,
-                    config_busqueda.dimension, caso};
                 reemplazados = reiniciar_poblacion_adaptativo(
-                    Population, Bestvect, parametros);
+                    Population, Bestvect, decision.parametros, caso);
                 detalle_restart = " mutation_share=" +
                                   fmt_fijo(decision.parametros.cuota_mutacion, 2);
             } else {

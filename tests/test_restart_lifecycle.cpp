@@ -477,13 +477,11 @@ static void test_refinamiento_despues_del_cap() {
 // `reemplazados = reiniciar_poblacion(poblacion, indice, record, config)`.
 // -------------------------------------------------------------------------
 
-// poblacion_legacy: individuos {TOKEN_MUL, k, TOKEN_X} (= k*x) con constantes
-// distintas, para contar por vector quienes cambian sin evaluar fitness. La
-// dimension 3 es deliberadamente distinta de la dimension por defecto (20):
-// si el reemplazo no derivara la dimension de la poblacion, los tests lo
-// verian aqui. En Python seria
+// Individuos {TOKEN_MUL, k, TOKEN_X} (= k*x). Para k=1..5 su fitness en el
+// caso 0 crece con k; la dimension 3 tambien comprueba que no se use el
+// default de 20. En Python seria
 // `[FunbObj([TOKEN_MUL, k, TOKEN_X], 0, 1, 0) for k in constantes]`.
-static std::vector<FunbObj> poblacion_legacy(const std::vector<int>& constantes) {
+static std::vector<FunbObj> poblacion_fixture(const std::vector<int>& constantes) {
     std::vector<FunbObj> poblacion;
     for (size_t i = 0; i < constantes.size(); i++) {
         poblacion.push_back(FunbObj(
@@ -503,7 +501,7 @@ static void test_reinicio_legacy_reemplaza_la_fraccion() {
 
     // 15 individuos: con la fraccion por defecto 0.8, int(0.8*15) = 12, el
     // mismo criterio que la linea del log `replaced=12`.
-    std::vector<FunbObj> poblacion = poblacion_legacy(
+    std::vector<FunbObj> poblacion = poblacion_fixture(
         {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15});
 
     std::vector<std::vector<ldouble>> antes;
@@ -543,7 +541,7 @@ static void test_reinicio_legacy_restaura_el_record() {
     srand(20261013);
 
     std::vector<FunbObj> poblacion =
-        poblacion_legacy({1, 2, 3, 4, 5, 6, 7, 8, 9, 10});
+        poblacion_fixture({1, 2, 3, 4, 5, 6, 7, 8, 9, 10});
 
     // Record simulado: un vector fijo distinto del individuo que hoy ocupa el
     // indice reservado (en una corrida estancada el mejor de la generacion no
@@ -567,7 +565,7 @@ static void test_reinicio_legacy_sin_record_no_toca_el_indice_reservado() {
     srand(20261013);
 
     std::vector<FunbObj> poblacion =
-        poblacion_legacy({1, 2, 3, 4, 5, 6, 7, 8, 9, 10});
+        poblacion_fixture({1, 2, 3, 4, 5, 6, 7, 8, 9, 10});
 
     const int indice_record = 5;
     const std::vector<ldouble> original = poblacion[indice_record].vecvalue();
@@ -581,6 +579,161 @@ static void test_reinicio_legacy_sin_record_no_toca_el_indice_reservado() {
               reemplazados, 8);
     check_bool("sin record el indice reservado queda intacto",
                poblacion[indice_record].vecvalue() == original);
+}
+
+static void test_reinicio_adaptativo_conserva_los_mejores() {
+    srand(20261017);
+    std::vector<FunbObj> poblacion = poblacion_fixture({3, 1, 5, 2, 4});
+    const auto primero = poblacion[1].vecvalue();
+    const auto segundo = poblacion[3].vecvalue();
+    const auto tercero = poblacion[0].vecvalue();
+    const auto cuarto = poblacion[4].vecvalue();
+    const auto quinto = poblacion[2].vecvalue();
+
+    const int reemplazados = reiniciar_poblacion_adaptativo(
+        poblacion, primero, {0.4L, 0.5L}, 0);
+
+    check_int("adaptive reemplaza 2 de 5", reemplazados, 2);
+    check_int("adaptive conserva el tamano", static_cast<int>(poblacion.size()), 5);
+    check_bool("adaptive conserva los 3 individuos mas aptos",
+               poblacion[1].vecvalue() == primero &&
+               poblacion[3].vecvalue() == segundo &&
+               poblacion[0].vecvalue() == tercero);
+    check_bool("adaptive reemplaza los dos peores y conserva su dimension",
+               poblacion[4].vecvalue() != cuarto && poblacion[2].vecvalue() != quinto &&
+               poblacion[4].vecvalue().size() == 3 && poblacion[2].vecvalue().size() == 3);
+}
+
+static void test_reinicio_adaptativo_inyecta_el_record() {
+    srand(20261018);
+    auto poblacion = poblacion_fixture({2, 1, 4, 3});
+    const auto primero = poblacion[1].vecvalue();
+    const auto segundo = poblacion[0].vecvalue();
+    const auto peor = poblacion[2].vecvalue();
+    const std::vector<ldouble> record = {TOKEN_ADD, TOKEN_CONST1, TOKEN_X};
+
+    const int reemplazados = reiniciar_poblacion_adaptativo(
+        poblacion, record, {0.5L, 0.5L}, 0);
+
+    check_int("el record cuenta entre 2 reemplazos", reemplazados, 2);
+    check_bool("la inyeccion conserva los dos mejores",
+               poblacion[1].vecvalue() == primero && poblacion[0].vecvalue() == segundo);
+    check_bool("el record ocupa un lugar reemplazado", poblacion[3].vecvalue() == record);
+    check_bool("tambien se reemplaza el peor", poblacion[2].vecvalue() != peor);
+}
+
+static void test_reinicio_adaptativo_inyecta_el_record_sin_cupo() {
+    auto poblacion = poblacion_fixture({2, 1});
+    const auto mejor = poblacion[1].vecvalue();
+    const std::vector<ldouble> record = {TOKEN_ADD, TOKEN_CONST1, TOKEN_X};
+
+    const int reemplazados = reiniciar_poblacion_adaptativo(
+        poblacion, record, {0.4L, 0.5L}, 0);
+
+    check_int("sin cupo el record cuenta como un reemplazo", reemplazados, 1);
+    check_bool("sin cupo el mejor se conserva y el record desplaza al peor",
+               poblacion[1].vecvalue() == mejor && poblacion[0].vecvalue() == record);
+}
+
+static int distancia_hamming(const std::vector<ldouble>& a,
+                            const std::vector<ldouble>& b) {
+    if (a.size() != b.size()) return -1;
+    int distancia = 0;
+    for (size_t i = 0; i < a.size(); i++) {
+        if (a[i] != b[i]) distancia++;
+    }
+    return distancia;
+}
+
+static void test_reinicio_adaptativo_compone_reemplazos_hibridos() {
+    struct Escenario {
+        long double cuota;
+        int mutaciones;
+        bool inyectar_record;
+    };
+    const Escenario escenarios[] = {
+        {0.0L, 0, false}, {0.5L, 2, false}, {1.0L, 4, false},
+        {0.5L, 1, true},
+    };
+
+    for (const Escenario& escenario : escenarios) {
+        srand(20261019);
+        std::vector<FunbObj> poblacion;
+        std::vector<std::vector<ldouble>> antes;
+        for (int i = 0; i < 10; i++) {
+            poblacion.push_back(FunbObj::create_random(20, 0));
+            antes.push_back(poblacion.back().vecvalue());
+        }
+        std::vector<ldouble> record;
+        if (escenario.inyectar_record) {
+            record = {TOKEN_ADD, TOKEN_CONST1, TOKEN_X};
+            record.resize(20, TOKEN_CONST1);
+        }
+        const int reemplazados = reiniciar_poblacion_adaptativo(
+            poblacion, record, {0.4L, escenario.cuota}, 0);
+
+        std::vector<int> sobrevivientes;
+        std::vector<int> cambiados;
+        for (int i = 0; i < 10; i++) {
+            if (poblacion[i].vecvalue() == antes[i]) sobrevivientes.push_back(i);
+            else cambiados.push_back(i);
+        }
+
+        // Con esta semilla, los individuos frescos distan al menos 3 tokens
+        // de cada sobreviviente; las mutaciones distan 1-2.
+        int mutaciones = 0;
+        int frescos = 0;
+        int records = 0;
+        for (int indice : cambiados) {
+            const auto vector = poblacion[indice].vecvalue();
+            if (!record.empty() && vector == record) {
+                records++;
+                continue;
+            }
+            int minima = 21;
+            for (int sobreviviente : sobrevivientes) {
+                const int distancia = distancia_hamming(vector, poblacion[sobreviviente].vecvalue());
+                if (distancia < minima) minima = distancia;
+            }
+            if (minima >= 1 && minima <= 2) mutaciones++;
+            if (minima >= 3 && minima <= 20) frescos++;
+        }
+        check_int("adaptive reemplaza 4 de 10", reemplazados, 4);
+        check_int("adaptive conserva 6 individuos", static_cast<int>(sobrevivientes.size()), 6);
+        check_int("adaptive respeta la cuota de mutaciones", mutaciones, escenario.mutaciones);
+        check_int("adaptive reserva el lugar del record", records, escenario.inyectar_record ? 1 : 0);
+        check_int("adaptive completa con individuos frescos", frescos,
+                  4 - escenario.mutaciones - records);
+    }
+}
+
+static void test_reinicio_adaptativo_muta_uno_o_dos_tokens() {
+    srand(20261020);
+    std::vector<ldouble> elite(20, TOKEN_CONST1);
+    elite[0] = TOKEN_X;
+    std::vector<FunbObj> poblacion;
+    poblacion.emplace_back(elite, 0, 1, 0);
+    for (int i = 0; i < 40; i++) {
+        poblacion.emplace_back(std::vector<ldouble>(20, TOKEN_CONST1), 0, 1, 0);
+    }
+    const int reemplazados = reiniciar_poblacion_adaptativo(
+        poblacion, elite, {1.0L, 1.0L}, 0);
+    int minimo = 20;
+    int maximo = 0;
+    for (size_t i = 1; i < poblacion.size(); i++) {
+        const int distancia = distancia_hamming(elite, poblacion[i].vecvalue());
+        if (distancia < minimo) minimo = distancia;
+        if (distancia > maximo) maximo = distancia;
+    }
+    check_int("adaptive conserva una elite con fraccion 1", reemplazados, 40);
+    check_int("las mutaciones cambian al menos un token", minimo, 1);
+    check_int("las mutaciones cambian como maximo dos tokens", maximo, 2);
+
+    std::vector<FunbObj> cortos = {
+        FunbObj({TOKEN_X}, 0, 1, 0), FunbObj({TOKEN_CONST1}, 0, 1, 0)};
+    reiniciar_poblacion_adaptativo(cortos, {TOKEN_X}, {1.0L, 1.0L}, 0);
+    check_int("una elite de un token produce un cambio",
+              distancia_hamming(cortos[0].vecvalue(), cortos[1].vecvalue()), 1);
 }
 
 int main() {
@@ -600,6 +753,11 @@ int main() {
     test_reinicio_legacy_reemplaza_la_fraccion();
     test_reinicio_legacy_restaura_el_record();
     test_reinicio_legacy_sin_record_no_toca_el_indice_reservado();
+    test_reinicio_adaptativo_conserva_los_mejores();
+    test_reinicio_adaptativo_inyecta_el_record();
+    test_reinicio_adaptativo_inyecta_el_record_sin_cupo();
+    test_reinicio_adaptativo_compone_reemplazos_hibridos();
+    test_reinicio_adaptativo_muta_uno_o_dos_tokens();
     std::cout << (g_fallos == 0 ? "OK" : "FALLARON") << ": "
               << (g_checks - g_fallos) << "/" << g_checks << " asserts\n";
     return g_fallos == 0 ? 0 : 1;

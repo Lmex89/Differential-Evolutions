@@ -98,15 +98,8 @@ foreach(nombre IN ITEMS test_funbobj_const test_grid test_ode_cases)
     add_test(NAME ${nombre} COMMAND ${nombre})
 endforeach()
 
-# El resto de tests con bucle DE (test_population, issue #11;
-# test_per_case_config; test_restart_escalation, issues #127/#128;
-# test_diversity_trigger, issue #129; test_restart_lifecycle, issue #138)
-# sigue incluyendo parse_tree.cpp desde su propio .cpp (el bucle DE y el
-# reinicio), que usa semilla.cpp, dualfunctions.cpp y funbobj.cpp (issue
-# #157). parse_tree.cpp NO se compila aparte o habria simbolos duplicados.
-# Necesitan src/ en el include path (asi resuelven tanto el .cpp incluido como
-# sus headers) y -DODE_NO_MAIN para que gane el main() del test.
-foreach(nombre IN ITEMS test_population test_per_case_config test_restart_escalation test_diversity_trigger test_restart_lifecycle)
+# Los tests del bucle DE incluyen parse_tree.cpp; no se compila aparte.
+foreach(nombre IN ITEMS test_population test_per_case_config)
     add_executable(${nombre}
         src/semilla.cpp
         src/dualfunctions.cpp
@@ -115,6 +108,18 @@ foreach(nombre IN ITEMS test_population test_per_case_config test_restart_escala
         tests/${nombre}.cpp
     )
     target_compile_definitions(${nombre} PRIVATE ODE_NO_MAIN)
+    target_include_directories(${nombre} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    add_test(NAME ${nombre} COMMAND ${nombre})
+endforeach()
+
+# Los tests del reinicio cruzan su interfaz sin enlazar el bucle DE.
+foreach(nombre IN ITEMS test_restart_escalation test_diversity_trigger test_restart_lifecycle)
+    add_executable(${nombre}
+        src/dualfunctions.cpp
+        src/funbobj.cpp
+        src/restart_lifecycle.cpp
+        tests/${nombre}.cpp
+    )
     target_include_directories(${nombre} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     add_test(NAME ${nombre} COMMAND ${nombre})
 endforeach()
