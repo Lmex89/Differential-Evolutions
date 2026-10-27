@@ -66,25 +66,33 @@ static void check_decimal(const std::string& nombre, long double recibido,
 // Atrapa: la funcion no acepta caso o usa defaults incorrectos.
 void test_resolver_config_caso_0_defaults() {
     // Sin variables de entorno, caso 0 debe devolver defaults originales.
-    ConfigBusqueda config = resolver_config(nullptr, nullptr, nullptr, nullptr, 0);
+    ConfigBusqueda config_busqueda;
+    ConfigReinicio config_reinicio;
+    resolver_config(nullptr, nullptr, nullptr, nullptr, 0,
+                    nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                    config_busqueda, config_reinicio);
     
-    check_int("caso_0 poblacion", config.poblacion, 100);
-    check_int("caso_0 dimension", config.dimension, 20);
-    check_int("caso_0 generaciones", config.max_generaciones, 5000);
-    check_bool("caso_0 warm_start", !config.warm_start);
+    check_int("caso_0 poblacion", config_busqueda.poblacion, 100);
+    check_int("caso_0 dimension", config_busqueda.dimension, 20);
+    check_int("caso_0 generaciones", config_busqueda.max_generaciones, 5000);
+    check_bool("caso_0 warm_start", !config_busqueda.warm_start);
 }
 
 // Seam 1: resolver_config con caso=3 devuelve defaults tuned para converger.
 // Atrapa: caso 3 no usa defaults mas agresivos.
 void test_resolver_config_caso_3_tuned() {
     // Caso 3 debe tener defaults mas agresivos (paper practice).
-    ConfigBusqueda config = resolver_config(nullptr, nullptr, nullptr, nullptr, 3);
+    ConfigBusqueda config_busqueda;
+    ConfigReinicio config_reinicio;
+    resolver_config(nullptr, nullptr, nullptr, nullptr, 3,
+                    nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                    config_busqueda, config_reinicio);
     
     // Segun el paper, casos mas complejos necesitan mas poblacion y generaciones.
     // Estos valores iniciales son placeholders; el experimento los ajustara.
-    check_bool("caso_3 poblacion >= 100", config.poblacion >= 100);
-    check_bool("caso_3 dimension >= 20", config.dimension >= 20);
-    check_bool("caso_3 generaciones >= 5000", config.max_generaciones >= 5000);
+    check_bool("caso_3 poblacion >= 100", config_busqueda.poblacion >= 100);
+    check_bool("caso_3 dimension >= 20", config_busqueda.dimension >= 20);
+    check_bool("caso_3 generaciones >= 5000", config_busqueda.max_generaciones >= 5000);
 }
 
 // Seam 1: resolver_config con env vars sobreescribe defaults por caso.
@@ -95,12 +103,16 @@ void test_resolver_config_env_override() {
     setenv("ODE_DIM", "30", 1);
     setenv("ODE_GEN", "10000", 1);
     
-    ConfigBusqueda config = resolver_config(getenv("ODE_POP"), getenv("ODE_DIM"),
-                                            getenv("ODE_GEN"), nullptr, 3);
+    ConfigBusqueda config_busqueda;
+    ConfigReinicio config_reinicio;
+    resolver_config(getenv("ODE_POP"), getenv("ODE_DIM"),
+                    getenv("ODE_GEN"), nullptr, 3,
+                    nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                    config_busqueda, config_reinicio);
     
-    check_int("env override poblacion", config.poblacion, 250);
-    check_int("env override dimension", config.dimension, 30);
-    check_int("env override generaciones", config.max_generaciones, 10000);
+    check_int("env override poblacion", config_busqueda.poblacion, 250);
+    check_int("env override dimension", config_busqueda.dimension, 30);
+    check_int("env override generaciones", config_busqueda.max_generaciones, 10000);
     
     // Limpiar variables de entorno para no afectar otros tests.
     unsetenv("ODE_POP");
@@ -119,15 +131,19 @@ void test_resolver_config_restart_params() {
     setenv("ODE_STALE_LIMIT", "300", 1);
     setenv("ODE_RESTART_FRACTION", "0.9", 1);
     
-    ConfigBusqueda config = resolver_config(nullptr, nullptr, nullptr, nullptr, 0,
-                                            getenv("ODE_STALE_LIMIT"),
-                                            getenv("ODE_RESTART_FRACTION"));
+    ConfigBusqueda config_busqueda;
+    ConfigReinicio config_reinicio;
+    resolver_config(nullptr, nullptr, nullptr, nullptr, 0,
+                    getenv("ODE_STALE_LIMIT"),
+                    getenv("ODE_RESTART_FRACTION"),
+                    nullptr, nullptr, nullptr, nullptr, nullptr,
+                    config_busqueda, config_reinicio);
     
-    check_int("stale_limit from env", config.stale_limit, 300);
+    check_int("stale_limit from env", config_reinicio.stale_limit, 300);
     // Comparacion con epsilon para long double (evita problemas de precision).
     const long double epsilon = 1e-9L;
     check_bool("restart_fraction from env", 
-               std::abs(config.restart_fraction - 0.9L) < epsilon);
+               std::abs(config_reinicio.restart_fraction - 0.9L) < epsilon);
     
     // Limpiar variables de entorno.
     unsetenv("ODE_STALE_LIMIT");
@@ -138,13 +154,17 @@ void test_resolver_config_restart_params() {
 // Atrapa: defaults incorrectos para parametros de reinicio.
 void test_resolver_config_restart_defaults() {
     // Sin env vars, debe usar defaults: stale_limit=500, restart_fraction=0.8.
-    ConfigBusqueda config = resolver_config(nullptr, nullptr, nullptr, nullptr, 0);
+    ConfigBusqueda config_busqueda;
+    ConfigReinicio config_reinicio;
+    resolver_config(nullptr, nullptr, nullptr, nullptr, 0,
+                    nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                    config_busqueda, config_reinicio);
     
-    check_int("stale_limit default", config.stale_limit, 500);
+    check_int("stale_limit default", config_reinicio.stale_limit, 500);
     // Comparacion con epsilon para long double (evita problemas de precision).
     const long double epsilon = 1e-9L;
     check_bool("restart_fraction default", 
-               std::abs(config.restart_fraction - 0.8L) < epsilon);
+               std::abs(config_reinicio.restart_fraction - 0.8L) < epsilon);
 }
 
 // -------------------------------------------------------------------------
@@ -155,14 +175,18 @@ void test_resolver_config_restart_defaults() {
 // Atrapa: defaults incorrectos para modo, fraccion minima, tope, share o umbral.
 void test_resolver_config_adaptive_defaults() {
     // Sin variables de entorno: modo legacy, min 0.4, cap 3, share 0.5, div 0.05.
-    ConfigBusqueda config = resolver_config(nullptr, nullptr, nullptr, nullptr, 0);
+    ConfigBusqueda config_busqueda;
+    ConfigReinicio config_reinicio;
+    resolver_config(nullptr, nullptr, nullptr, nullptr, 0,
+                    nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                    config_busqueda, config_reinicio);
 
     check_bool("restart_mode default legacy",
-               config.restart_mode == ModoReinicio::legacy);
-    check_decimal("restart_min_fraction default", config.restart_min_fraction, 0.4L);
-    check_int("restart_cap default", config.restart_cap, 3);
-    check_decimal("restart_mutation_share default", config.restart_mutation_share, 0.5L);
-    check_decimal("div_threshold default", config.div_threshold, 0.05L);
+               config_reinicio.restart_mode == ModoReinicio::legacy);
+    check_decimal("restart_min_fraction default", config_reinicio.restart_min_fraction, 0.4L);
+    check_int("restart_cap default", config_reinicio.restart_cap, 3);
+    check_decimal("restart_mutation_share default", config_reinicio.restart_mutation_share, 0.5L);
+    check_decimal("div_threshold default", config_reinicio.div_threshold, 0.05L);
 }
 
 // Seam 3: env vars sobreescriben las cinco claves nuevas. Los valores son
@@ -170,20 +194,23 @@ void test_resolver_config_adaptive_defaults() {
 // posicional mal ordenado rompa el test.
 // Atrapa: las claves no se parsean o se asignan al campo equivocado.
 void test_resolver_config_adaptive_overrides() {
-    ConfigBusqueda config = resolver_config("120", "22", "6000", "0", 0,
-                                            "300", "0.9",
-                                            "adaptive", "0.6", "5", "0.75", "0.02");
+    ConfigBusqueda config_busqueda;
+    ConfigReinicio config_reinicio;
+    resolver_config("120", "22", "6000", "0", 0,
+                    "300", "0.9",
+                    "adaptive", "0.6", "5", "0.75", "0.02",
+                    config_busqueda, config_reinicio);
 
     // Las claves anteriores siguen leyendose en su posicion original.
-    check_int("stale_limit sigue leyendose", config.stale_limit, 300);
-    check_decimal("restart_fraction sigue leyendose", config.restart_fraction, 0.9L);
+    check_int("stale_limit sigue leyendose", config_reinicio.stale_limit, 300);
+    check_decimal("restart_fraction sigue leyendose", config_reinicio.restart_fraction, 0.9L);
     // Las cinco claves nuevas toman el valor del entorno.
     check_bool("restart_mode adaptive",
-               config.restart_mode == ModoReinicio::adaptive);
-    check_decimal("restart_min_fraction override", config.restart_min_fraction, 0.6L);
-    check_int("restart_cap override", config.restart_cap, 5);
-    check_decimal("restart_mutation_share override", config.restart_mutation_share, 0.75L);
-    check_decimal("div_threshold override", config.div_threshold, 0.02L);
+               config_reinicio.restart_mode == ModoReinicio::adaptive);
+    check_decimal("restart_min_fraction override", config_reinicio.restart_min_fraction, 0.6L);
+    check_int("restart_cap override", config_reinicio.restart_cap, 5);
+    check_decimal("restart_mutation_share override", config_reinicio.restart_mutation_share, 0.75L);
+    check_decimal("div_threshold override", config_reinicio.div_threshold, 0.02L);
 }
 
 // Seam 3: valores invalidos caen a los defaults, igual que las claves ODE_*
@@ -192,31 +219,40 @@ void test_resolver_config_adaptive_overrides() {
 void test_resolver_config_adaptive_invalid() {
     // Modo inexistente y modo mal capitalizado: el unico valor valido es
     // exactamente "adaptive"; todo lo demas vuelve a legacy.
-    ConfigBusqueda modo_raros = resolver_config(nullptr, nullptr, nullptr, nullptr, 0,
-                                                nullptr, nullptr,
-                                                "bogus", nullptr, nullptr,
-                                                nullptr, nullptr);
+    ConfigBusqueda config_busqueda1;
+    ConfigReinicio config_reinicio1;
+    resolver_config(nullptr, nullptr, nullptr, nullptr, 0,
+                    nullptr, nullptr,
+                    "bogus", nullptr, nullptr,
+                    nullptr, nullptr,
+                    config_busqueda1, config_reinicio1);
     check_bool("restart_mode bogus usa legacy",
-               modo_raros.restart_mode == ModoReinicio::legacy);
+               config_reinicio1.restart_mode == ModoReinicio::legacy);
 
-    ConfigBusqueda modo_mayusculas = resolver_config(nullptr, nullptr, nullptr, nullptr, 0,
-                                                     nullptr, nullptr,
-                                                     "Adaptive", nullptr, nullptr,
-                                                     nullptr, nullptr);
+    ConfigBusqueda config_busqueda2;
+    ConfigReinicio config_reinicio2;
+    resolver_config(nullptr, nullptr, nullptr, nullptr, 0,
+                    nullptr, nullptr,
+                    "Adaptive", nullptr, nullptr,
+                    nullptr, nullptr,
+                    config_busqueda2, config_reinicio2);
     check_bool("restart_mode Adaptive usa legacy (exacto)",
-               modo_mayusculas.restart_mode == ModoReinicio::legacy);
+               config_reinicio2.restart_mode == ModoReinicio::legacy);
 
     // Numericos invalidos: texto no numerico, tope por debajo del minimo (1),
     // string vacio y numero con sufijo -> cada uno usa su default.
-    ConfigBusqueda config = resolver_config(nullptr, nullptr, nullptr, nullptr, 0,
-                                            nullptr, nullptr,
-                                            nullptr, "abc", "0", "", "0.05x");
+    ConfigBusqueda config_busqueda3;
+    ConfigReinicio config_reinicio3;
+    resolver_config(nullptr, nullptr, nullptr, nullptr, 0,
+                    nullptr, nullptr,
+                    nullptr, "abc", "0", "", "0.05x",
+                    config_busqueda3, config_reinicio3);
     check_decimal("restart_min_fraction invalida usa 0.4",
-                  config.restart_min_fraction, 0.4L);
-    check_int("restart_cap 0 usa 3", config.restart_cap, 3);
+                  config_reinicio3.restart_min_fraction, 0.4L);
+    check_int("restart_cap 0 usa 3", config_reinicio3.restart_cap, 3);
     check_decimal("restart_mutation_share invalida usa 0.5",
-                  config.restart_mutation_share, 0.5L);
-    check_decimal("div_threshold invalido usa 0.05", config.div_threshold, 0.05L);
+                  config_reinicio3.restart_mutation_share, 0.5L);
+    check_decimal("div_threshold invalido usa 0.05", config_reinicio3.div_threshold, 0.05L);
 }
 
 // -------------------------------------------------------------------------
