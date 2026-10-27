@@ -60,6 +60,54 @@ FunbObj::FunbObj(vector<ldouble> vecval,ldouble start,ldouble stop, int caso)
     // asi que el divisor (npoints-1) nunca es cero.
     _dx = (stop - start) / static_cast<long double>(_xrange.size() - 1);
 }
+
+// create_random (issue #165): factory method que construye un Individual
+// aleatorio completo. La logica se movio desde vector_population en
+// parse_tree.cpp: primer token operador (aridad > 0) para evitar colapso de
+// expresiones, resto con sorteo uniforme, y reparacion x-dependence (inyecta
+// TOKEN_X si no existe). Es el unico camino de construccion aleatoria para
+// el modulo Individual. En Python seria:
+//     @classmethod
+//     def create_random(cls, dimension, caso):
+//         tokens = [random_operator_token()]
+//         tokens.extend(random_token() for _ in range(dimension - 1))
+//         if not any(is_x_dependent(t) for t in tokens):
+//             for _ in range(2):
+//                 tokens[randint(0, dimension - 1)] = TOKEN_X
+//         return cls(tokens, 0, 1, caso)
+FunbObj FunbObj::create_random(int dimension, int caso) {
+    // Precondicion: dimension >= 1 para evitar division por cero en rand() % dimension.
+    // Con dimension == 0, el bucle de inyeccion de TOKEN_X divide por cero. En Python
+    // seria `assert dimension >= 1, "individual requires at least 1 token"`.
+    assert(dimension >= 1);
+
+    vector<ldouble> tokens;
+
+    // El primer token debe ser un operador (aridad > 0) para evitar el colapso
+    // de expresiones: si el primer token es una hoja (aridad 0), toda la
+    // expresión colapsa a un solo token y los demás se desperdician. En Python
+    // sería `tokens.append(random_operator_token())`.
+    tokens.push_back(random_operator_token());
+
+    // El resto de los tokens pueden ser cualquiera (hojas u operadores).
+    for (int i = 1; i < dimension; i++){
+        tokens.push_back(random_token());
+    }
+
+    // La fitness exige alguna hoja que dependa de x (la variable o x^2/x^3,
+    // issue #63): si el sorteo no saco el token x, se escribe en dos
+    // posiciones al azar de todo el vector (forzarlo sigue siendo una
+    // reparacion valida). Antes el indice se limitaba a [0, tam-4] (resto del
+    // tamano de poblacion de la version vieja) y las ultimas posiciones nunca
+    // se reparaban.
+    if (std::find(tokens.begin(), tokens.end(), TOKEN_X) == tokens.end()){
+        for (int i = 0; i < 2; i++){
+            tokens[rand() % dimension] = TOKEN_X;
+        }
+    }
+
+    return FunbObj(std::move(tokens), 0, 1, caso);
+}
 // represant() es const porque no modifica el estado observable del objeto.
 // En Python sería @property def represant(self): return self._repre.
 string FunbObj::represant() const{
