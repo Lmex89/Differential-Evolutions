@@ -2,11 +2,14 @@
 //
 // El issue #138 definio la costura entre el bucle DE y la decision de reinicio:
 // ControlReinicio recibe la configuracion inmutable una sola vez y, por
-// generacion, recibe los hechos ya calculados (si hubo `new_best` y el resumen
-// de diversidad) y devuelve un valor de decision. El ciclo completo (issue
-// #139) cubre el estancamiento, la diversidad (solo adaptive), la prioridad de
-// stale, el reset por `new_best`, la supresion legacy y el refinamiento tras
-// el cap.
+// generacion, recibe la evidencia de la generacion (si hubo `new_best` y los
+// fitness de la poblacion) y devuelve un valor de decision. Desde el issue
+// #167 el modulo calcula el resumen de diversidad a partir de esa evidencia:
+// el bucle DE ya no decide si la diversidad se evalua.
+//
+// El ciclo completo (issue #139) cubre el estancamiento, la diversidad (solo
+// adaptive), la prioridad de stale, el reset por `new_best`, la supresion
+// legacy y el refinamiento tras el cap.
 //
 // Se compila con el modulo restart_lifecycle.cpp; el test cruza la costura del
 // modulo sin incluir parse_tree.cpp. En Python seria
@@ -14,6 +17,7 @@
 
 #include <iostream>
 #include <string>
+#include <vector>
 #include <cmath>
 
 #include "restart_lifecycle.h"
@@ -48,11 +52,31 @@ static void check_decimal(const std::string& nombre, long double recibido,
     }
 }
 
-// resumen_colapsado: resumen de diversidad con CV bajo y suficientes finitos
-// (8 de 10 = 80%), el caso que dispara el canal de diversidad. En Python seria
-// un fixture `resumen_colapsado()`.
-static ResumenDiversidad resumen_colapsado() {
-    return ResumenDiversidad{8, 10, 0.05L};
+// -------------------------------------------------------------------------
+// Fixtures: la evidencia de una generacion es la lista de fitness de la
+// poblacion (el modulo calcula el CV a partir de ella). En Python seria un
+// fixture `poblacion_colapsada()`.
+// -------------------------------------------------------------------------
+
+// poblacion_colapsada: 8 de 10 individuos con el mismo fitness (CV = 0) y 2
+// no evaluables. Es la senal de colapso que dispara el canal de diversidad.
+static std::vector<ldouble> poblacion_colapsada() {
+    return {1.0L, 1.0L, 1.0L, 1.0L, 1.0L, 1.0L, 1.0L, 1.0L,
+            INFINITY, INFINITY};
+}
+
+// poblacion_dispersa: 10 individuos finitos con CV ≈ 0.69, por encima del
+// umbral que usan los tests: con esta evidencia el canal de diversidad no
+// dispara aunque la configuracion sea la misma.
+static std::vector<ldouble> poblacion_dispersa() {
+    return {1.0L, 1.0L, 1.0L, 1.0L, 1.0L, 1.0L, 1.0L, 1.0L, 1.0L, 4.0L};
+}
+
+// poblacion_pocos_finitos: solo 1 de 10 evaluable (10% < 25%); la guarda de
+// proporcion finita bloquea el canal de diversidad.
+static std::vector<ldouble> poblacion_pocos_finitos() {
+    return {1.0L, INFINITY, INFINITY, INFINITY, INFINITY,
+            INFINITY, INFINITY, INFINITY, INFINITY, INFINITY};
 }
 
 // -------------------------------------------------------------------------
@@ -65,10 +89,9 @@ static void test_primera_generacion_sin_reinicio() {
     const ConfigReinicio config;
     ControlReinicio control(config);
 
-    // Primera generacion sin record nuevo y sin resumen de diversidad: en
-    // Python seria `decision = control.decidir(False, ResumenDiversidad())`.
-    const DecisionReinicio decision =
-        control.decidir(false, ResumenDiversidad{});
+    // Primera generacion sin record nuevo y sin evidencia de diversidad: en
+    // Python seria `decision = control.decidir(False, [])`.
+    const DecisionReinicio decision = control.decidir(false, {});
 
     check_bool("primera generacion no reinicia", !decision.hay_reinicio());
     check_bool("primera generacion no reporta disparador",
@@ -87,8 +110,7 @@ static void test_sin_reinicio_debajo_del_limite() {
 
     // 4 generaciones sin new_best y sin diversidad: aún no debe reiniciar
     for (int i = 0; i < 4; ++i) {
-        const DecisionReinicio decision =
-            control.decidir(false, ResumenDiversidad{});
+        const DecisionReinicio decision = control.decidir(false, {});
         check_bool("generacion " + std::to_string(i + 1) +
                        " no reinicia (debajo del limite)",
                    !decision.hay_reinicio());
@@ -108,15 +130,16 @@ static void test_adaptive_bajo_limite_con_guardas_fallando() {
     config.div_threshold = 0.1L;
     ControlReinicio control(config);
 
-    // Hay record, pero los resumenes no cumplen los guards: 1/10 finitos
-    // (10% < 25%) y CV alto (0.5 >= 0.1).
-    control.decidir(true, ResumenDiversidad{});
-    const ResumenDiversidad pocos_finitos{1, 10, 0.05L};
-    const ResumenDiversidad cv_alto{10, 10, 0.5L};
+    // Hay record, pero la evidencia no cumple los guards: 1/10 finitos
+    // (10% < 25%) y CV alto (0.69 >= 0.1).
+    control.decidir(true, {});
+    const std::vector<ldouble> pocos_finitos = poblacion_pocos_finitos();
+    const std::vector<ldouble> cv_alto = poblacion_dispersa();
 
     for (int i = 0; i < 4; ++i){
-        const ResumenDiversidad& resumen = (i % 2 == 0) ? pocos_finitos : cv_alto;
-        const DecisionReinicio decision = control.decidir(false, resumen);
+        const std::vector<ldouble>& evidencia =
+            (i % 2 == 0) ? pocos_finitos : cv_alto;
+        const DecisionReinicio decision = control.decidir(false, evidencia);
         check_bool("adaptive bajo limite con guards fallando no reinicia " +
                        std::to_string(i + 1),
                    !decision.hay_reinicio());
@@ -142,20 +165,18 @@ static void test_reinicio_en_el_limite_stale() {
 
     // 4 generaciones sin new_best: aún no reinicia
     for (int i = 0; i < 4; ++i) {
-        control.decidir(false, ResumenDiversidad{});
+        control.decidir(false, {});
     }
 
     // 5ta generación: dispara stale
-    const DecisionReinicio decision =
-        control.decidir(false, ResumenDiversidad{});
+    const DecisionReinicio decision = control.decidir(false, {});
     check_bool("quinta generacion reinicia por stale", decision.hay_reinicio());
     check_bool("disparador es stale",
                decision.disparador == DisparadorReinicio::stale);
 
     // Tras el reinicio, el contador se resetea: las siguientes 4 no reinician
     for (int i = 0; i < 4; ++i) {
-        const DecisionReinicio siguiente =
-            control.decidir(false, ResumenDiversidad{});
+        const DecisionReinicio siguiente = control.decidir(false, {});
         check_bool("generacion post-reinicio " + std::to_string(i + 1) +
                        " no reinicia (contador reseteado)",
                    !siguiente.hay_reinicio());
@@ -181,23 +202,23 @@ static void test_nuevo_record_reinicia_ventana_y_escalera() {
     ControlReinicio control(config);
 
     // Primer reinicio: fraccion 0.4 (primer escalon)
-    for (int i = 0; i < 2; ++i) control.decidir(false, ResumenDiversidad{});
-    DecisionReinicio primero = control.decidir(false, ResumenDiversidad{});
+    for (int i = 0; i < 2; ++i) control.decidir(false, {});
+    DecisionReinicio primero = control.decidir(false, {});
     check_bool("primer reinicio stale dispara", primero.hay_reinicio());
     check_decimal("primer reinicio: fraccion 0.4", primero.parametros.fraccion, 0.4L);
 
     // Segundo reinicio consecutivo sin new_best: fraccion 0.6 (segundo escalon)
-    for (int i = 0; i < 2; ++i) control.decidir(false, ResumenDiversidad{});
-    DecisionReinicio segundo = control.decidir(false, ResumenDiversidad{});
+    for (int i = 0; i < 2; ++i) control.decidir(false, {});
+    DecisionReinicio segundo = control.decidir(false, {});
     check_bool("segundo reinicio stale dispara", segundo.hay_reinicio());
     check_decimal("segundo reinicio: fraccion 0.6 (escalada)", segundo.parametros.fraccion, 0.6L);
 
     // Ahora llega un new_best: resetea escalera y ventana
-    control.decidir(true, ResumenDiversidad{});
+    control.decidir(true, {});
 
     // Tercer reinicio tras new_best: debe volver a 0.4 (no 0.8)
-    for (int i = 0; i < 2; ++i) control.decidir(false, ResumenDiversidad{});
-    DecisionReinicio tras_record = control.decidir(false, ResumenDiversidad{});
+    for (int i = 0; i < 2; ++i) control.decidir(false, {});
+    DecisionReinicio tras_record = control.decidir(false, {});
     check_bool("tercer reinicio tras new_best dispara", tras_record.hay_reinicio());
     check_decimal("tras new_best la fraccion vuelve a 0.4",
                   tras_record.parametros.fraccion, 0.4L);
@@ -206,9 +227,9 @@ static void test_nuevo_record_reinicia_ventana_y_escalera() {
 }
 
 // -------------------------------------------------------------------------
-// Seam: En modo adaptive, si hay record finito y el resumen de diversidad
-// muestra colapso (CV bajo, suficientes individuos finitos), dispara reinicio
-// por diversidad ANTES de llegar al stale limit.
+// Seam: En modo adaptive, si hay record finito y la evidencia de la
+// generacion muestra colapso (CV bajo, suficientes individuos finitos),
+// dispara reinicio por diversidad ANTES de llegar al stale limit.
 // Atrapa: que no se evalúe diversidad, que se dispare stale en vez de diversity,
 // o que se dispare sin haber tenido un new_best previo.
 // -------------------------------------------------------------------------
@@ -220,15 +241,43 @@ static void test_diversidad_dispara_en_modo_adaptive() {
     ControlReinicio control(config);
 
     // Primero necesitamos un record finito (new_best)
-    control.decidir(true, ResumenDiversidad{});
+    control.decidir(true, {});
 
     // Ahora simulamos una generación con diversidad colapsada:
-    // CV bajo (0.05 < 0.1), suficientes individuos finitos (8 de 10 = 80%)
+    // CV bajo (0 < 0.1), suficientes individuos finitos (8 de 10 = 80%)
     const DecisionReinicio decision =
-        control.decidir(false, resumen_colapsado());
+        control.decidir(false, poblacion_colapsada());
 
     check_bool("diversidad dispara reinicio en modo adaptive", decision.hay_reinicio());
     check_bool("disparador es diversity", decision.disparador == DisparadorReinicio::diversity);
+}
+
+// -------------------------------------------------------------------------
+// Seam: el modulo calcula el resumen de diversidad a partir de la evidencia
+// de la generacion: con la misma configuracion, una poblacion dispersa (CV
+// ≈ 0.69) no dispara y una colapsada (CV = 0) si.
+// Atrapa: que el CV se reciba ya calculado (el seam seria el resumen, no la
+// evidencia) o que la decision ignore la evidencia de la poblacion.
+// -------------------------------------------------------------------------
+static void test_diversidad_calculada_desde_la_evidencia() {
+    ConfigReinicio config;
+    config.restart_mode = ModoReinicio::adaptive;
+    config.stale_limit = 10;
+    config.div_threshold = 0.1L;
+    ControlReinicio control(config);
+
+    control.decidir(true, {});  // record finito
+
+    const DecisionReinicio dispersa =
+        control.decidir(false, poblacion_dispersa());
+    check_bool("una poblacion dispersa no dispara diversidad",
+               !dispersa.hay_reinicio());
+
+    const DecisionReinicio colapsada =
+        control.decidir(false, poblacion_colapsada());
+    check_bool("la misma configuracion con la poblacion colapsada si dispara",
+               colapsada.hay_reinicio() &&
+                   colapsada.disparador == DisparadorReinicio::diversity);
 }
 
 // -------------------------------------------------------------------------
@@ -244,13 +293,13 @@ static void test_diversidad_resetea_estancamiento() {
     config.div_threshold = 0.1L;
     ControlReinicio control(config);
 
-    control.decidir(true, ResumenDiversidad{});  // hay record
+    control.decidir(true, {});  // hay record
     for (int i = 0; i < 4; ++i){
-        control.decidir(false, ResumenDiversidad{});  // ventana = 4
+        control.decidir(false, {});  // ventana = 4
     }
 
     const DecisionReinicio diversidad =
-        control.decidir(false, resumen_colapsado());
+        control.decidir(false, poblacion_colapsada());
     check_bool("diversidad dispara antes del limite",
                diversidad.hay_reinicio() &&
                    diversidad.disparador == DisparadorReinicio::diversity);
@@ -259,8 +308,7 @@ static void test_diversidad_resetea_estancamiento() {
     // debajo del limite 10. Sin el reset, la quinta seria la decima y
     // dispararia stale.
     for (int i = 0; i < 5; ++i){
-        const DecisionReinicio decision =
-            control.decidir(false, ResumenDiversidad{});
+        const DecisionReinicio decision = control.decidir(false, {});
         check_bool("post-diversidad " + std::to_string(i + 1) +
                        " no reinicia (ventana reseteada)",
                    !decision.hay_reinicio());
@@ -268,17 +316,17 @@ static void test_diversidad_resetea_estancamiento() {
 
     // Cuatro mas (9) siguen sin disparar; la decima desde el reset si.
     for (int i = 0; i < 4; ++i){
-        control.decidir(false, ResumenDiversidad{});
+        control.decidir(false, {});
     }
-    const DecisionReinicio stale = control.decidir(false, ResumenDiversidad{});
+    const DecisionReinicio stale = control.decidir(false, {});
     check_bool("la ventana reseteada vuelve a disparar stale en el limite",
                stale.hay_reinicio() &&
                    stale.disparador == DisparadorReinicio::stale);
 }
 
 // -------------------------------------------------------------------------
-// Seam: En modo legacy, nunca se evalúa diversidad aunque las condiciones
-// estén dadas. Solo stale puede disparar reinicio.
+// Seam: En modo legacy, nunca se evalúa diversidad aunque la evidencia de la
+// generacion este colapsada. Solo stale puede disparar reinicio.
 // Atrapa: que se dispare diversidad en modo legacy.
 // -------------------------------------------------------------------------
 static void test_legacy_suprime_diversidad() {
@@ -288,11 +336,11 @@ static void test_legacy_suprime_diversidad() {
     config.div_threshold = 0.1L;
     ControlReinicio control(config);
 
-    // Tenemos record y diversidad colapsada
-    control.decidir(true, ResumenDiversidad{});
+    // Tenemos record y evidencia colapsada
+    control.decidir(true, {});
 
     const DecisionReinicio decision =
-        control.decidir(false, resumen_colapsado());
+        control.decidir(false, poblacion_colapsada());
 
     check_bool("legacy no dispara con diversidad colapsada", !decision.hay_reinicio());
 }
@@ -317,9 +365,8 @@ static void test_legacy_no_consume_el_escalador() {
     // partir del cuarto devolveria refinamiento (0.2). Legacy siempre usa la
     // fraccion configurada.
     for (int reinicio = 0; reinicio < 4; ++reinicio){
-        control.decidir(false, ResumenDiversidad{});
-        const DecisionReinicio decision =
-            control.decidir(false, ResumenDiversidad{});
+        control.decidir(false, {});
+        const DecisionReinicio decision = control.decidir(false, {});
         check_bool("legacy reinicia por stale " + std::to_string(reinicio + 1),
                    decision.hay_reinicio() &&
                        decision.disparador == DisparadorReinicio::stale);
@@ -342,16 +389,16 @@ static void test_stale_tiene_prioridad_sobre_diversity() {
     ControlReinicio control(config);
 
     // Tenemos record
-    control.decidir(true, ResumenDiversidad{});
+    control.decidir(true, {});
 
     // Llamamos decidir 2 veces sin new_best (stale counter = 2)
-    control.decidir(false, ResumenDiversidad{});
-    control.decidir(false, ResumenDiversidad{});
+    control.decidir(false, {});
+    control.decidir(false, {});
 
     // En la tercera llamada, stale_limit se alcanza (counter = 3)
     // Y además la diversidad está colapsada
     const DecisionReinicio decision =
-        control.decidir(false, resumen_colapsado());
+        control.decidir(false, poblacion_colapsada());
 
     check_bool("stale dispara cuando ambos condiciones se cumplen", decision.hay_reinicio());
     check_bool("stale tiene prioridad sobre diversity",
@@ -375,26 +422,26 @@ static void test_refinamiento_despues_del_cap() {
 
     // Primer reinicio: fracción mínima 0.4. La primera llamada solo avanza el
     // contador; la segunda es la que dispara.
-    control.decidir(false, ResumenDiversidad{});
-    const DecisionReinicio r1 = control.decidir(false, ResumenDiversidad{});
+    control.decidir(false, {});
+    const DecisionReinicio r1 = control.decidir(false, {});
     check_bool("primer reinicio dispara", r1.hay_reinicio());
     check_decimal("primer reinicio: fraccion 0.4", r1.parametros.fraccion, 0.4L);
 
     // Segundo reinicio: 0.6
-    control.decidir(false, ResumenDiversidad{});
-    const DecisionReinicio r2 = control.decidir(false, ResumenDiversidad{});
+    control.decidir(false, {});
+    const DecisionReinicio r2 = control.decidir(false, {});
     check_bool("segundo reinicio dispara", r2.hay_reinicio());
     check_decimal("segundo reinicio: fraccion 0.6", r2.parametros.fraccion, 0.6L);
 
     // Tercer reinicio: 0.8
-    control.decidir(false, ResumenDiversidad{});
-    const DecisionReinicio r3 = control.decidir(false, ResumenDiversidad{});
+    control.decidir(false, {});
+    const DecisionReinicio r3 = control.decidir(false, {});
     check_bool("tercer reinicio dispara", r3.hay_reinicio());
     check_decimal("tercer reinicio: fraccion 0.8", r3.parametros.fraccion, 0.8L);
 
     // Cuarto reinicio (después del cap=3): refinamiento
-    control.decidir(false, ResumenDiversidad{});
-    const DecisionReinicio r4 = control.decidir(false, ResumenDiversidad{});
+    control.decidir(false, {});
+    const DecisionReinicio r4 = control.decidir(false, {});
     check_bool("cuarto reinicio dispara", r4.hay_reinicio());
     check_decimal("cuarto reinicio: fraccion refinamiento 0.2", r4.parametros.fraccion, 0.2L);
     check_decimal("cuarto reinicio: mutation_share 1.0", r4.parametros.cuota_mutacion, 1.0L);
@@ -408,6 +455,7 @@ int main() {
     test_reinicio_en_el_limite_stale();
     test_nuevo_record_reinicia_ventana_y_escalera();
     test_diversidad_dispara_en_modo_adaptive();
+    test_diversidad_calculada_desde_la_evidencia();
     test_diversidad_resetea_estancamiento();
     test_legacy_suprime_diversidad();
     test_legacy_no_consume_el_escalador();
