@@ -63,4 +63,4 @@ Domain-specific terms used in this codebase.
 | **`x_rango()`** | Generates the evaluation grid (array of `[x, 1.0, 0.0]` triples) over which fitness is measured; exactly `npoints` points with both endpoints included (100 for `[0,1]`, paper §5) |
 | **`OperF` / `OperF2`** | Functions that dispatch unary (1-arg) and binary (2-arg) operations on dual-number vectors |
 | **`narg()`** | Returns the arity (number of arguments) for a given token code |
-| **`vector_population`** | Builds one random individual: `tam` token codes drawn uniformly from the 1–21 alphabet |
+| **`FunbObj::create_random()`** | Builds one complete random individual for a run's ODE case: an operator-first token vector of the configured dimension, repaired to contain an x-dependent token |
