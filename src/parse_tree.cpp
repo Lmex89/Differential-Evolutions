@@ -562,16 +562,15 @@ int createPopulation(vector<FunbObj>& Population, const ConfigBusqueda& config, 
 }
 
 // -------------------------------------------------------------------------
-// Diversity y reinicio ahora en src/restart_lifecycle.{h,cpp} (issues #166,
-// #167 y #168).
-// El módulo expone: ResumenDiversidad, resumir_diversidad(), 
+// Diversity y reinicio ahora en src/restart_lifecycle.{h,cpp} (issues #166 a
+// #170). El módulo expone: ResumenDiversidad, resumir_diversidad(),
 // dispara_reinicio_por_diversidad(), ControlReinicio, DisparadorReinicio,
-// DecisionReinicio, ModoReinicio, parte_entera() y reiniciar_poblacion().
-// Desde el issue #167 la decision se pide con la evidencia de la generacion:
-// el bucle DE entrega los fitness de la poblacion y el modulo calcula el
-// resumen de diversidad y devuelve la decision. Los reemplazos legacy y
-// adaptativo viven en el modulo y derivan su dimension de la poblacion.
-// En Python seria `from restart_lifecycle import reiniciar_poblacion`.
+// ResultadoReinicio, ModoReinicio y parte_entera().
+// Desde el issue #170 hay una sola operacion por generacion: el bucle DE
+// entrega los fitness de la poblacion, la poblacion nativa, el indice del
+// mejor y el record; el modulo decide, calcula la diversidad, aplica el
+// reemplazo legacy o adaptive y devuelve el resultado. En Python seria
+// `from restart_lifecycle import ControlReinicio`.
 // -------------------------------------------------------------------------
 
 // mutacion_rand1: nucleo de la mutacion DE/rand/1/bin, ecuacion (7) del paper:
@@ -986,11 +985,12 @@ int main() {
     // el mejor hallazgo. configurable via ODE_STALE_LIMIT y ODE_RESTART_FRACTION.
     const int stale_limit = config_reinicio.stale_limit;
 
-    // ControlReinicio (issue #139): el ciclo de vida vive en un solo objeto.
-    // main() ya no lleva su propio contador de estancamiento ni su escalador;
-    // le pasa a decidir() los hechos de la generacion y obedece la decision.
-    // En Python seria `control_reinicio = ControlReinicio(config_reinicio)`.
-    ControlReinicio control_reinicio(config_reinicio);
+    // ControlReinicio (issues #139 y #170): el ciclo de vida vive en un solo
+    // objeto. main() no lleva contador de estancamiento ni escalador, y una
+    // sola llamada por generacion decide y aplica el reemplazo. El caso ODE
+    // se fija aqui porque no cambia durante la corrida.
+    // En Python seria `control_reinicio = ControlReinicio(config_reinicio, caso)`.
+    ControlReinicio control_reinicio(config_reinicio, caso);
 
     // Cabecera de la corrida (reemplaza el banner de ASCII art): una sola
     // linea con toda la configuracion en clave=valor. `population=` informa el
@@ -1115,56 +1115,39 @@ int main() {
             fitnesses.push_back(individuo.fitness());
         }
 
-        // El ciclo de vida decide (issue #139): stale tiene prioridad sobre
-        // diversity y cualquier reinicio resetea la ventana de estancamiento.
+        // El ciclo de vida decide y aplica en una sola pasada (issue #170):
+        // stale tiene prioridad sobre diversity, cualquier reinicio resetea la
+        // ventana y el modo (legacy/adaptive) elige el reemplazo. El bucle DE
+        // solo entrega los hechos y registra el resultado.
         // En Python seria
-        // `decision = control_reinicio.decidir(nuevo_record, fitnesses)`.
-        const DecisionReinicio decision =
-            control_reinicio.decidir(nuevo_record, fitnesses);
+        // `resultado = control_reinicio.reiniciar(nuevo_record, fitnesses, poblacion, mejor, record)`.
+        const ResultadoReinicio resultado = control_reinicio.reiniciar(
+            nuevo_record, fitnesses, Population, mejor, Bestvect);
 
-        // El modo lo elige ODE_RESTART_MODE: `legacy` conserva el reinicio
-        // historico y `adaptive` usa el reinicio elitista con composicion
-        // hibrida (issue #127).
-        if (decision.hay_reinicio()){
-            int reemplazados = 0;
-            const long double fraccion = decision.parametros.fraccion;
+        // Una sola linea `restart |` para ambos modos: `trigger=` y
+        // `fraction=` dejan auditable que disparo el reinicio y con que
+        // fuerza, `kept=` cuenta los sobrevivientes intactos (issue #127) y
+        // `mutation_share=` registra la cuota escalada en adaptive (issue
+        // #128). En adaptive el trigger distingue estancamiento de colapso de
+        // diversidad (issue #129). Las claves viejas (`gen`, `stagnant_gens`,
+        // `replaced`) conservan nombre y orden por compatibilidad con los
+        // consumidores del log, que leen por clave (`clave=valor`).
+        if (resultado.hay_reinicio()){
             string detalle_restart;
-            if (config_reinicio.restart_mode == ModoReinicio::adaptive){
-                // La escalera de #128 ya decidio la fraccion y la cuota de
-                // este reinicio: 0.4 + 0.2 * consecutivos hasta el tope, y
-                // refinamiento-only tras ODE_RESTART_CAP reinicios sin mejora.
-                reemplazados = reiniciar_poblacion_adaptativo(
-                    Population, Bestvect, decision.parametros, caso);
+            if (resultado.reportar_cuota_mutacion){
                 detalle_restart = " mutation_share=" +
-                                  fmt_fijo(decision.parametros.cuota_mutacion, 2);
-            } else {
-                // `mejor` es el indice del mejor de la generacion actual (el
-                // que el reemplazo respeta); ademas el helper restaura alli el
-                // record historico `Bestvect`, porque en una corrida estancada
-                // el mejor del momento no es el record (issue #82).
-                reemplazados = reiniciar_poblacion(Population, mejor, Bestvect, config_reinicio, caso);
+                                  fmt_fijo(resultado.parametros.cuota_mutacion, 2);
             }
-            // Una sola linea `restart |` para ambos modos: `trigger=` y
-            // `fraction=` dejan auditable que disparo el reinicio y con que
-            // fuerza, `kept=` cuenta los sobrevivientes intactos (issue #127)
-            // y `mutation_share=` registra la cuota escalada en adaptive
-            // (issue #128). En adaptive el trigger distingue estancamiento de
-            // colapso de diversidad (issue #129). Las claves viejas (`gen`,
-            // `stagnant_gens`, `replaced`) conservan nombre y orden por
-            // compatibilidad con los consumidores del log, que leen por clave
-            // (`clave=valor`). `stagnant_gens=` sale de la decision porque la
-            // ventana ya quedo reseteada dentro de decidir().
-            const int conservados = static_cast<int>(Population.size()) - reemplazados;
             const char* trigger =
-                decision.disparador == DisparadorReinicio::diversity
+                resultado.disparador == DisparadorReinicio::diversity
                     ? "diversity" : "stale";
             log_info() << "restart | gen=" << gen
-                       << " stagnant_gens=" << decision.generaciones_sin_mejora
-                       << " replaced=" << reemplazados
-                       << " fraction=" << fmt_fijo(fraccion, 2)
+                       << " stagnant_gens=" << resultado.generaciones_sin_mejora
+                       << " replaced=" << resultado.reemplazados
+                       << " fraction=" << fmt_fijo(resultado.parametros.fraccion, 2)
                        << detalle_restart
                        << " trigger=" << trigger
-                       << " kept=" << conservados << '\n';
+                       << " kept=" << resultado.conservados << '\n';
             cout.flush();
         }
 

@@ -1,12 +1,14 @@
-// restart_lifecycle.h — Modulo del ciclo de vida de reinicio (issue #166).
+// restart_lifecycle.h — Modulo del ciclo de vida de reinicio (issues #166 a
+// #170).
 //
-// Separa la configuracion, el resumen de diversidad y el disparador del
-// bucle DE. El DE loop sigue manejando generaciones, logging y resolucion
-// del entorno; este modulo solo decide cuando y como reiniciar.
+// Separa la configuracion, el resumen de diversidad, la decision y el
+// reemplazo del bucle DE. El DE loop sigue manejando generaciones, logging y
+// resolucion del entorno; este modulo decide cuando reiniciar, aplica el
+// reemplazo y devuelve el resultado completo para el log.
 //
 // En Python seria un modulo `restart_lifecycle.py` con las clases
-// `ConfigReinicio`, `ResumenDiversidad`, `EscaladorReinicio` y
-// `ControlReinicio`.
+// `ConfigReinicio`, `ResumenDiversidad`, `ControlReinicio` y
+// `ResultadoReinicio`.
 
 #ifndef RESTART_LIFECYCLE_H
 #define RESTART_LIFECYCLE_H
@@ -105,15 +107,20 @@ bool dispara_reinicio_por_diversidad(const ResumenDiversidad& resumen,
 enum class DisparadorReinicio { ninguno, stale, diversity };
 
 // -------------------------------------------------------------------------
-// DecisionReinicio: valor devuelto por ControlReinicio::decidir(). El campo
-// `disparador` distingue "no reinicio" de un reinicio real sin usar punteros
-// que main() no puede leer despues. En Python seria un dataclass con
-// `trigger: DisparadorReinicio = NINGUNO`, `parametros` y
-// `generaciones_sin_mejora: int = 0`.
-struct DecisionReinicio {
+// ResultadoReinicio: resultado completo de una pasada del ciclo de vida
+// (issue #170). El campo `disparador` distingue "no reinicio" de un reinicio
+// real sin usar punteros que main() no puede leer despues. `conservados` y
+// `reemplazados` son los campos `kept=` y `replaced=` del log; la cuota de
+// mutacion solo se informa en adaptive (`reportar_cuota_mutacion`). En Python
+// seria un dataclass con `trigger`, `parametros`, `generaciones_sin_mejora`,
+// `reemplazados`, `conservados` y `reportar_cuota_mutacion`.
+struct ResultadoReinicio {
     DisparadorReinicio disparador = DisparadorReinicio::ninguno;
     ParametrosReinicio parametros{};
     int generaciones_sin_mejora = 0;
+    int reemplazados = 0;
+    int conservados = 0;
+    bool reportar_cuota_mutacion = false;
 
     // hay_reinicio: predicado legible para main() y para los tests; evita
     // comparar contra `ninguno` en cada consumidor. En Python:
@@ -124,35 +131,49 @@ struct DecisionReinicio {
 };
 
 // -------------------------------------------------------------------------
-// ControlReinicio: estado del ciclo de vida de una corrida (issue #138).
-// La configuracion se guarda por valor y es inmutable; la ventana de
-// estancamiento y la escalera de escalado son estado mutable. `decidir()`
-// recibe la evidencia de la generacion (nuevo record y fitness de la
-// poblacion) y devuelve la decision; el consumidor (main) la ejecuta sin
-// conocer los detalles. Desde el issue #167 el modulo calcula tambien el
-// resumen de diversidad: el bucle DE solo aporta los datos, no decide si la
-// diversidad se evalua.
-// En Python seria una clase con `decidir(nuevo_record, fitnesses)` y
-// estado interno.
+// ControlReinicio: estado del ciclo de vida de una corrida (issues #138 y
+// #170). La configuracion y el caso ODE se guardan por valor y son inmutables;
+// la ventana de estancamiento y la escalera de escalado son estado mutable.
+// `reiniciar()` es la unica operacion por generacion: recibe la evidencia
+// (nuevo record y fitness), decide, aplica el reemplazo legacy o adaptive
+// sobre la poblacion nativa y devuelve el resultado. El bucle DE solo aporta
+// los datos y registra el resultado; no decide ni reemplaza. En Python seria
+// una clase con `reiniciar(nuevo_record, fitnesses, poblacion, indice, record)`
+// y estado interno.
 class ControlReinicio {
 public:
-    explicit ControlReinicio(const ConfigReinicio& config);
+    ControlReinicio(const ConfigReinicio& config, int caso);
 
-    // decidir: evalua la evidencia de la generacion y devuelve la decision.
-    // `fitnesses` son los valores de la poblacion de esta generacion (el
-    // modulo calcula el CV a partir de los finitos). Stale tiene prioridad
-    // sobre diversity si ambos disparan en la misma generacion; el reinicio
-    // resetea la ventana pero no la escalera (la escalera solo la resetea
-    // `nuevo_record`). En Python:
-    // `if nuevo_record: ...; if generaciones >= stale_limit: return _reiniciar(STALE)`.
-    DecisionReinicio decidir(bool nuevo_record,
-                             const std::vector<ldouble>& fitnesses);
+    // reiniciar: una pasada del ciclo de vida. `fitnesses` son los valores de
+    // la poblacion de esta generacion (el modulo calcula el CV a partir de los
+    // finitos). Stale tiene prioridad sobre diversity si ambos disparan en la
+    // misma generacion; cualquier reinicio resetea la ventana, pero solo
+    // `nuevo_record` resetea la escalera. Si hay reinicio, la poblacion se
+    // reemplaza in situ y el resultado trae trigger, ventana, parametros y
+    // conteos; si no, devuelve un resultado sin disparador. `indice_record` es
+    // el indice que el reemplazo legacy reserva para el record historico. En
+    // Python:
+    // `if nuevo_record: ...; if generaciones >= stale_limit: return self._aplicar(STALE, poblacion, record)`.
+    ResultadoReinicio reiniciar(bool nuevo_record,
+                                const std::vector<ldouble>& fitnesses,
+                                std::vector<FunbObj>& poblacion,
+                                int indice_record,
+                                const std::vector<ldouble>& record);
 
 private:
-    // reiniciar: arma la decision de un reinicio real y resetea la ventana,
-    // pero no la escalera (solo `nuevo_record` la resetea). En adaptive
-    // avanza la escalera; en legacy usa la fraccion configurada y no lo toca.
-    DecisionReinicio reiniciar(DisparadorReinicio disparador);
+    // preparar_reinicio: arma la parte de decision del resultado y resetea la
+    // ventana, pero no la escalera (solo `nuevo_record` la resetea). En
+    // adaptive avanza la escalera; en legacy usa la fraccion configurada y no
+    // la toca. En Python: `return ResultadoReinicio(trigger, parametros, estancadas)`.
+    ResultadoReinicio preparar_reinicio(DisparadorReinicio disparador);
+
+    // aplicar_reemplazo: ejecuta la implementacion legacy o adaptive segun el
+    // modo y devuelve cuantos individuos se reemplazaron. En Python:
+    // `return reiniciar_poblacion(...) if legacy else reiniciar_poblacion_adaptativo(...)`.
+    int aplicar_reemplazo(const ParametrosReinicio& parametros,
+                          std::vector<FunbObj>& poblacion,
+                          int indice_record,
+                          const std::vector<ldouble>& record);
 
     // consumir_siguiente: parametros del proximo reinicio segun cuantos
     // reinicios consecutivos sin mejora lleva el episodio (issue #128), y
@@ -162,6 +183,7 @@ private:
     ParametrosReinicio consumir_siguiente();
 
     const ConfigReinicio config_;
+    const int caso_;
     int generaciones_sin_mejora_ = 0;
     int reinicios_consecutivos_ = 0;  // escalera de escalado (#128)
     bool hay_record_ = false;
@@ -174,29 +196,5 @@ private:
 // en un solo lugar (vivía en parse_tree.cpp; el issue #168 lo trae al modulo
 // porque el reemplazo legacy ahora vive aqui). En Python: `int(fraccion * total)`.
 int parte_entera(long double fraccion, int total);
-
-// -------------------------------------------------------------------------
-// reiniciar_poblacion: reemplazo legacy detras de la costura del modulo
-// (issues #82/#168). Restaura el mejor historico `record` en el indice
-// reservado y no vuelve a tocar ese indice (elitismo real), luego reemplaza
-// int(restart_fraction * tam) indices con individuos aleatorios frescos de
-// FunbObj::create_random. La dimension sale de la propia poblacion (invariante
-// de la costura: poblacion no vacia con dimension uniforme), asi la
-// configuracion de busqueda no cruza el modulo. Devuelve los reemplazados,
-// que es el campo `replaced=` del log `restart |` (kept = tamano - reemplazados).
-// El orden de llamadas a rand() es identico al historico: corridas legacy con
-// semilla fija siguen siendo bit-reproducibles. En Python seria
-// `reemplazados = reiniciar_poblacion(poblacion, indice, record, config, caso)`.
-int reiniciar_poblacion(std::vector<FunbObj>& poblacion, int indice_record,
-                        const std::vector<ldouble>& record,
-                        const ConfigReinicio& config, int caso);
-
-// Reemplazo adaptativo: conserva los mas aptos, restaura el record ausente y
-// combina mutaciones de sobrevivientes con individuos frescos. La poblacion
-// tiene dimension uniforme; el retorno cuenta tambien el lugar del record.
-// En Python: `reemplazados = reiniciar_poblacion_adaptativo(poblacion, record, parametros, caso)`.
-int reiniciar_poblacion_adaptativo(std::vector<FunbObj>& poblacion,
-                                   const std::vector<ldouble>& record,
-                                   const ParametrosReinicio& parametros, int caso);
 
 #endif // RESTART_LIFECYCLE_H

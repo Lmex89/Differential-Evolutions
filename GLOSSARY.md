@@ -30,7 +30,8 @@ Domain-specific terms used in this codebase.
 | **Generation** | One iteration of the evolutionary loop |
 | **Convergence** | When fitness drops below a threshold (1e-5), indicating a sufficiently good solution has been found |
 | **Restart escalation** | Growing the replacement fraction across consecutive restarts without a new best (0.4 → 0.6 → 0.8 by default), capped by `ODE_RESTART_FRACTION` |
-| **Restart lifecycle** | The per-run decision process that observes fitness improvement and diversity, tracks staleness and restart escalation, and decides whether a restart is due |
+| **Restart lifecycle** | The per-run decision process that observes fitness improvement and diversity, tracks staleness and restart escalation, decides whether a restart is due, and applies the legacy or adaptive population replacement |
+| **Restart outcome** | The result of one per-generation Restart lifecycle pass: either no restart, or the trigger, stale-generation count, replacement fraction, kept/replaced counts, and adaptive mutation share of an actual restart |
 | **Refinement-only restart** | Degraded restart after `ODE_RESTART_CAP` consecutive restarts without improvement: fraction 0.2 and mutation share 1.0 until a `new_best` resets the ladder. The adaptive routine (#127) consumes the share as 1–2-token elite point mutations and keeps the all-time record in the population |
 | **Diversity trigger** | Adaptive-mode restart fired when the coefficient of variation (population std / mean) of the finite fitnesses drops below `ODE_DIV_THRESHOLD` (0.05), provided at least 25% of the population is finite and a finite record exists. It shares the escalation ladder with the stale trigger, logs `trigger=diversity`, and any restart resets the stale-generation window |
 

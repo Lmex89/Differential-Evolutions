@@ -1,23 +1,22 @@
-// test_restart_lifecycle.cpp — tests del ciclo de vida de reinicios (issues #139, #167 y #168).
+// test_restart_lifecycle.cpp — tests del ciclo de vida de reinicios
+// (issues #139, #167, #168, #169 y #170).
 //
-// El issue #138 definio la costura entre el bucle DE y la decision de reinicio:
-// ControlReinicio recibe la configuracion inmutable una sola vez y, por
-// generacion, recibe la evidencia de la generacion (si hubo `new_best` y los
-// fitness de la poblacion) y devuelve un valor de decision. Desde el issue
-// #167 el modulo calcula el resumen de diversidad a partir de esa evidencia:
-// el bucle DE ya no decide si la diversidad se evalua.
+// El issue #138 definio la costura entre el bucle DE y la decision de reinicio.
+// Desde el issue #170 hay una sola operacion por generacion: ControlReinicio
+// recibe la configuracion y el caso ODE una sola vez y, por generacion,
+// recibe la evidencia (si hubo `new_best` y los fitness), la poblacion nativa,
+// el indice del mejor y el record; decide, aplica el reemplazo legacy o
+// adaptive y devuelve un ResultadoReinicio completo. El bucle DE ya no
+// coordina una decision con un reemplazo posterior.
 //
 // El ciclo completo (issue #139) cubre el estancamiento, la diversidad (solo
 // adaptive), la prioridad de stale, el reset por `new_best`, la supresion
-// legacy y el refinamiento tras el cap.
-//
-// Desde el issue #168 la costura del modulo incluye tambien el reemplazo
-// legacy: `reiniciar_poblacion` recibe la poblacion nativa y no la
-// configuracion de busqueda (la dimension se derive de la poblacion).
+// legacy y el refinamiento tras el cap. La regresion de secuencia legacy con
+// semilla fija (#170) fija trigger, conteos y vectores generacion a generacion.
 //
 // Se compila con el modulo restart_lifecycle.cpp; el test cruza la costura del
 // modulo sin incluir parse_tree.cpp. En Python seria
-// `from restart_lifecycle import ControlReinicio, reiniciar_poblacion`.
+// `from restart_lifecycle import ControlReinicio`.
 
 #include <iostream>
 #include <string>
@@ -73,6 +72,30 @@ static void check_int(const std::string& nombre, int recibido, int esperado) {
     }
 }
 
+// check_vector: igualdad exacta de un vector de tokens. En Python seria
+// `assert recibido == esperado`.
+static void check_vector(const std::string& nombre,
+                         const std::vector<ldouble>& recibido,
+                         const std::vector<ldouble>& esperado) {
+    g_checks++;
+    if (recibido == esperado) {
+        std::cout << "PASS  " << nombre << "\n";
+        return;
+    }
+    std::cout << "FAIL  " << nombre << "  (got=";
+    for (size_t i = 0; i < recibido.size(); i++) {
+        if (i) std::cout << ",";
+        std::cout << static_cast<int>(recibido[i]);
+    }
+    std::cout << " esperado=";
+    for (size_t i = 0; i < esperado.size(); i++) {
+        if (i) std::cout << ",";
+        std::cout << static_cast<int>(esperado[i]);
+    }
+    std::cout << ")\n";
+    g_fallos++;
+}
+
 // -------------------------------------------------------------------------
 // Fixtures: la evidencia de una generacion es la lista de fitness de la
 // poblacion (el modulo calcula el CV a partir de ella). En Python seria un
@@ -100,19 +123,53 @@ static std::vector<ldouble> poblacion_pocos_finitos() {
             INFINITY, INFINITY, INFINITY, INFINITY, INFINITY};
 }
 
+// Individuos {TOKEN_MUL, k, TOKEN_X} (= k*x). Para k=1..5 su fitness en el
+// caso 0 crece con k; la dimension 3 tambien comprueba que no se use el
+// default de 20. En Python seria
+// `[FunbObj([TOKEN_MUL, k, TOKEN_X], 0, 1, 0) for k in constantes]`.
+static std::vector<FunbObj> poblacion_fixture(const std::vector<int>& constantes) {
+    std::vector<FunbObj> poblacion;
+    for (size_t i = 0; i < constantes.size(); i++) {
+        poblacion.push_back(FunbObj(
+            std::vector<ldouble>{static_cast<ldouble>(TOKEN_MUL),
+                                 static_cast<ldouble>(constantes[i]),
+                                 static_cast<ldouble>(TOKEN_X)},
+            0, 1, 0));
+    }
+    return poblacion;
+}
+
+// poblacion_generica: poblacion pequena y uniforme para los tests de decision
+// que no examinan vectores. Desde el issue #170 la operacion unica necesita
+// una poblacion nativa aunque la generacion no reinicie.
+static std::vector<FunbObj> poblacion_generica() {
+    return poblacion_fixture({1, 2, 3, 4, 5, 6, 7, 8, 9, 10});
+}
+
+// paso: invoca la unica operacion por generacion con un indice valido. Evita
+// repetir el boilerplate en los tests de decision; los tests de reemplazo
+// llaman a `reiniciar` directamente para fijar el indice reservado.
+static ResultadoReinicio paso(ControlReinicio& control, bool nuevo_record,
+                              const std::vector<ldouble>& fitnesses,
+                              std::vector<FunbObj>& poblacion,
+                              const std::vector<ldouble>& record = {}) {
+    return control.reiniciar(nuevo_record, fitnesses, poblacion, 0, record);
+}
+
 // -------------------------------------------------------------------------
-// Seam: ControlReinicio::decidir() con la configuracion por defecto y una
+// Seam: ControlReinicio::reiniciar() con la configuracion por defecto y una
 // generacion sin `new_best` ni senal de diversidad.
 // Atrapa: que el esqueleto reinicie en la primera generacion o que el valor
 // de decision no distinga "no reinicio" de un reinicio real.
 // -------------------------------------------------------------------------
 static void test_primera_generacion_sin_reinicio() {
     const ConfigReinicio config;
-    ControlReinicio control(config);
+    ControlReinicio control(config, 0);
+    std::vector<FunbObj> poblacion = poblacion_generica();
 
     // Primera generacion sin record nuevo y sin evidencia de diversidad: en
-    // Python seria `decision = control.decidir(False, [])`.
-    const DecisionReinicio decision = control.decidir(false, {});
+    // Python seria `resultado = control.reiniciar(False, [], poblacion, 0, record)`.
+    const ResultadoReinicio decision = paso(control, false, {}, poblacion);
 
     check_bool("primera generacion no reinicia", !decision.hay_reinicio());
     check_bool("primera generacion no reporta disparador",
@@ -120,18 +177,19 @@ static void test_primera_generacion_sin_reinicio() {
 }
 
 // -------------------------------------------------------------------------
-// Seam: ControlReinicio::decidir() rastrea generaciones sin mejora y NO
+// Seam: ControlReinicio::reiniciar() rastrea generaciones sin mejora y NO
 // reinicia mientras el contador esté por debajo del stale_limit configurado.
 // Atrapa: reiniciar antes de tiempo o no llevar el contador correctamente.
 // -------------------------------------------------------------------------
 static void test_sin_reinicio_debajo_del_limite() {
     ConfigReinicio config;
     config.stale_limit = 5;  // Límite corto para probar el tracking
-    ControlReinicio control(config);
+    ControlReinicio control(config, 0);
+    std::vector<FunbObj> poblacion = poblacion_generica();
 
     // 4 generaciones sin new_best y sin diversidad: aún no debe reiniciar
     for (int i = 0; i < 4; ++i) {
-        const DecisionReinicio decision = control.decidir(false, {});
+        const ResultadoReinicio decision = paso(control, false, {}, poblacion);
         check_bool("generacion " + std::to_string(i + 1) +
                        " no reinicia (debajo del limite)",
                    !decision.hay_reinicio());
@@ -149,32 +207,33 @@ static void test_adaptive_bajo_limite_con_guardas_fallando() {
     config.restart_mode = ModoReinicio::adaptive;
     config.stale_limit = 5;
     config.div_threshold = 0.1L;
-    ControlReinicio control(config);
+    ControlReinicio control(config, 0);
+    std::vector<FunbObj> poblacion = poblacion_generica();
 
     // Hay record, pero la evidencia no cumple los guards: 1/10 finitos
     // (10% < 25%) y CV alto (0.69 >= 0.1).
-    control.decidir(true, {});
+    paso(control, true, {}, poblacion);
     const std::vector<ldouble> pocos_finitos = poblacion_pocos_finitos();
     const std::vector<ldouble> cv_alto = poblacion_dispersa();
 
     for (int i = 0; i < 4; ++i){
         const std::vector<ldouble>& evidencia =
             (i % 2 == 0) ? pocos_finitos : cv_alto;
-        const DecisionReinicio decision = control.decidir(false, evidencia);
+        const ResultadoReinicio decision = paso(control, false, evidencia, poblacion);
         check_bool("adaptive bajo limite con guards fallando no reinicia " +
                        std::to_string(i + 1),
                    !decision.hay_reinicio());
     }
 
     // El contador no se toco: la quinta generacion sin mejora dispara stale.
-    const DecisionReinicio quinta = control.decidir(false, pocos_finitos);
+    const ResultadoReinicio quinta = paso(control, false, pocos_finitos, poblacion);
     check_bool("el conteo sigue vivo pese a evaluar diversidad",
                quinta.hay_reinicio() &&
                    quinta.disparador == DisparadorReinicio::stale);
 }
 
 // -------------------------------------------------------------------------
-// Seam: ControlReinicio::decidir() dispara reinicio con trigger=stale cuando
+// Seam: ControlReinicio::reiniciar() dispara reinicio con trigger=stale cuando
 // las generaciones sin mejora alcanzan el stale_limit configurado.
 // Atrapa: no disparar en el límite, usar otro trigger, o no resetear el
 // contador tras el reinicio.
@@ -182,22 +241,23 @@ static void test_adaptive_bajo_limite_con_guardas_fallando() {
 static void test_reinicio_en_el_limite_stale() {
     ConfigReinicio config;
     config.stale_limit = 5;
-    ControlReinicio control(config);
+    ControlReinicio control(config, 0);
+    std::vector<FunbObj> poblacion = poblacion_generica();
 
     // 4 generaciones sin new_best: aún no reinicia
     for (int i = 0; i < 4; ++i) {
-        control.decidir(false, {});
+        paso(control, false, {}, poblacion);
     }
 
     // 5ta generación: dispara stale
-    const DecisionReinicio decision = control.decidir(false, {});
+    const ResultadoReinicio decision = paso(control, false, {}, poblacion);
     check_bool("quinta generacion reinicia por stale", decision.hay_reinicio());
     check_bool("disparador es stale",
                decision.disparador == DisparadorReinicio::stale);
 
     // Tras el reinicio, el contador se resetea: las siguientes 4 no reinician
     for (int i = 0; i < 4; ++i) {
-        const DecisionReinicio siguiente = control.decidir(false, {});
+        const ResultadoReinicio siguiente = paso(control, false, {}, poblacion);
         check_bool("generacion post-reinicio " + std::to_string(i + 1) +
                        " no reinicia (contador reseteado)",
                    !siguiente.hay_reinicio());
@@ -205,7 +265,7 @@ static void test_reinicio_en_el_limite_stale() {
 }
 
 // -------------------------------------------------------------------------
-// Seam: ControlReinicio::decidir() con nuevo_record=true debe resetear tanto
+// Seam: ControlReinicio::reiniciar() con nuevo_record=true debe resetear tanto
 // la ventana de estancamiento (generaciones_sin_mejora_) como la escalera del
 // escalador (reinicios_consecutivos_), para que el próximo reinicio vuelva a
 // fraccion mínima (0.4) en lugar de continuar escalando.
@@ -220,26 +280,27 @@ static void test_nuevo_record_reinicia_ventana_y_escalera() {
     config.restart_fraction = 0.8L;
     config.restart_mutation_share = 0.5L;
     config.restart_cap = 3;
-    ControlReinicio control(config);
+    ControlReinicio control(config, 0);
+    std::vector<FunbObj> poblacion = poblacion_generica();
 
     // Primer reinicio: fraccion 0.4 (primer escalon)
-    for (int i = 0; i < 2; ++i) control.decidir(false, {});
-    DecisionReinicio primero = control.decidir(false, {});
+    for (int i = 0; i < 2; ++i) paso(control, false, {}, poblacion);
+    ResultadoReinicio primero = paso(control, false, {}, poblacion);
     check_bool("primer reinicio stale dispara", primero.hay_reinicio());
     check_decimal("primer reinicio: fraccion 0.4", primero.parametros.fraccion, 0.4L);
 
     // Segundo reinicio consecutivo sin new_best: fraccion 0.6 (segundo escalon)
-    for (int i = 0; i < 2; ++i) control.decidir(false, {});
-    DecisionReinicio segundo = control.decidir(false, {});
+    for (int i = 0; i < 2; ++i) paso(control, false, {}, poblacion);
+    ResultadoReinicio segundo = paso(control, false, {}, poblacion);
     check_bool("segundo reinicio stale dispara", segundo.hay_reinicio());
     check_decimal("segundo reinicio: fraccion 0.6 (escalada)", segundo.parametros.fraccion, 0.6L);
 
     // Ahora llega un new_best: resetea escalera y ventana
-    control.decidir(true, {});
+    paso(control, true, {}, poblacion);
 
     // Tercer reinicio tras new_best: debe volver a 0.4 (no 0.8)
-    for (int i = 0; i < 2; ++i) control.decidir(false, {});
-    DecisionReinicio tras_record = control.decidir(false, {});
+    for (int i = 0; i < 2; ++i) paso(control, false, {}, poblacion);
+    ResultadoReinicio tras_record = paso(control, false, {}, poblacion);
     check_bool("tercer reinicio tras new_best dispara", tras_record.hay_reinicio());
     check_decimal("tras new_best la fraccion vuelve a 0.4",
                   tras_record.parametros.fraccion, 0.4L);
@@ -259,15 +320,16 @@ static void test_diversidad_dispara_en_modo_adaptive() {
     config.restart_mode = ModoReinicio::adaptive;
     config.stale_limit = 10;  // Lo suficientemente alto para que no dispar stale
     config.div_threshold = 0.1L;
-    ControlReinicio control(config);
+    ControlReinicio control(config, 0);
+    std::vector<FunbObj> poblacion = poblacion_generica();
 
     // Primero necesitamos un record finito (new_best)
-    control.decidir(true, {});
+    paso(control, true, {}, poblacion);
 
     // Ahora simulamos una generación con diversidad colapsada:
     // CV bajo (0 < 0.1), suficientes individuos finitos (8 de 10 = 80%)
-    const DecisionReinicio decision =
-        control.decidir(false, poblacion_colapsada());
+    const ResultadoReinicio decision =
+        paso(control, false, poblacion_colapsada(), poblacion);
 
     check_bool("diversidad dispara reinicio en modo adaptive", decision.hay_reinicio());
     check_bool("disparador es diversity", decision.disparador == DisparadorReinicio::diversity);
@@ -285,17 +347,18 @@ static void test_diversidad_calculada_desde_la_evidencia() {
     config.restart_mode = ModoReinicio::adaptive;
     config.stale_limit = 10;
     config.div_threshold = 0.1L;
-    ControlReinicio control(config);
+    ControlReinicio control(config, 0);
+    std::vector<FunbObj> poblacion = poblacion_generica();
 
-    control.decidir(true, {});  // record finito
+    paso(control, true, {}, poblacion);  // record finito
 
-    const DecisionReinicio dispersa =
-        control.decidir(false, poblacion_dispersa());
+    const ResultadoReinicio dispersa =
+        paso(control, false, poblacion_dispersa(), poblacion);
     check_bool("una poblacion dispersa no dispara diversidad",
                !dispersa.hay_reinicio());
 
-    const DecisionReinicio colapsada =
-        control.decidir(false, poblacion_colapsada());
+    const ResultadoReinicio colapsada =
+        paso(control, false, poblacion_colapsada(), poblacion);
     check_bool("la misma configuracion con la poblacion colapsada si dispara",
                colapsada.hay_reinicio() &&
                    colapsada.disparador == DisparadorReinicio::diversity);
@@ -312,15 +375,16 @@ static void test_diversidad_resetea_estancamiento() {
     config.restart_mode = ModoReinicio::adaptive;
     config.stale_limit = 10;
     config.div_threshold = 0.1L;
-    ControlReinicio control(config);
+    ControlReinicio control(config, 0);
+    std::vector<FunbObj> poblacion = poblacion_generica();
 
-    control.decidir(true, {});  // hay record
+    paso(control, true, {}, poblacion);  // hay record
     for (int i = 0; i < 4; ++i){
-        control.decidir(false, {});  // ventana = 4
+        paso(control, false, {}, poblacion);  // ventana = 4
     }
 
-    const DecisionReinicio diversidad =
-        control.decidir(false, poblacion_colapsada());
+    const ResultadoReinicio diversidad =
+        paso(control, false, poblacion_colapsada(), poblacion);
     check_bool("diversidad dispara antes del limite",
                diversidad.hay_reinicio() &&
                    diversidad.disparador == DisparadorReinicio::diversity);
@@ -329,7 +393,7 @@ static void test_diversidad_resetea_estancamiento() {
     // debajo del limite 10. Sin el reset, la quinta seria la decima y
     // dispararia stale.
     for (int i = 0; i < 5; ++i){
-        const DecisionReinicio decision = control.decidir(false, {});
+        const ResultadoReinicio decision = paso(control, false, {}, poblacion);
         check_bool("post-diversidad " + std::to_string(i + 1) +
                        " no reinicia (ventana reseteada)",
                    !decision.hay_reinicio());
@@ -337,9 +401,9 @@ static void test_diversidad_resetea_estancamiento() {
 
     // Cuatro mas (9) siguen sin disparar; la decima desde el reset si.
     for (int i = 0; i < 4; ++i){
-        control.decidir(false, {});
+        paso(control, false, {}, poblacion);
     }
-    const DecisionReinicio stale = control.decidir(false, {});
+    const ResultadoReinicio stale = paso(control, false, {}, poblacion);
     check_bool("la ventana reseteada vuelve a disparar stale en el limite",
                stale.hay_reinicio() &&
                    stale.disparador == DisparadorReinicio::stale);
@@ -355,13 +419,14 @@ static void test_legacy_suprime_diversidad() {
     config.restart_mode = ModoReinicio::legacy;
     config.stale_limit = 10;
     config.div_threshold = 0.1L;
-    ControlReinicio control(config);
+    ControlReinicio control(config, 0);
+    std::vector<FunbObj> poblacion = poblacion_generica();
 
     // Tenemos record y evidencia colapsada
-    control.decidir(true, {});
+    paso(control, true, {}, poblacion);
 
-    const DecisionReinicio decision =
-        control.decidir(false, poblacion_colapsada());
+    const ResultadoReinicio decision =
+        paso(control, false, poblacion_colapsada(), poblacion);
 
     check_bool("legacy no dispara con diversidad colapsada", !decision.hay_reinicio());
 }
@@ -380,14 +445,15 @@ static void test_legacy_no_consume_el_escalador() {
     config.restart_min_fraction = 0.4L;
     config.restart_mutation_share = 0.5L;
     config.restart_cap = 3;
-    ControlReinicio control(config);
+    ControlReinicio control(config, 0);
+    std::vector<FunbObj> poblacion = poblacion_generica();
 
     // Cuatro reinicios legacy consecutivos: si consumiera el escalador, a
     // partir del cuarto devolveria refinamiento (0.2). Legacy siempre usa la
     // fraccion configurada.
     for (int reinicio = 0; reinicio < 4; ++reinicio){
-        control.decidir(false, {});
-        const DecisionReinicio decision = control.decidir(false, {});
+        paso(control, false, {}, poblacion);
+        const ResultadoReinicio decision = paso(control, false, {}, poblacion);
         check_bool("legacy reinicia por stale " + std::to_string(reinicio + 1),
                    decision.hay_reinicio() &&
                        decision.disparador == DisparadorReinicio::stale);
@@ -407,19 +473,20 @@ static void test_stale_tiene_prioridad_sobre_diversity() {
     config.restart_mode = ModoReinicio::adaptive;
     config.stale_limit = 3;
     config.div_threshold = 0.1L;
-    ControlReinicio control(config);
+    ControlReinicio control(config, 0);
+    std::vector<FunbObj> poblacion = poblacion_generica();
 
     // Tenemos record
-    control.decidir(true, {});
+    paso(control, true, {}, poblacion);
 
-    // Llamamos decidir 2 veces sin new_best (stale counter = 2)
-    control.decidir(false, {});
-    control.decidir(false, {});
+    // Llamamos a la operacion unica 2 veces sin new_best (stale counter = 2)
+    paso(control, false, {}, poblacion);
+    paso(control, false, {}, poblacion);
 
     // En la tercera llamada, stale_limit se alcanza (counter = 3)
     // Y además la diversidad está colapsada
-    const DecisionReinicio decision =
-        control.decidir(false, poblacion_colapsada());
+    const ResultadoReinicio decision =
+        paso(control, false, poblacion_colapsada(), poblacion);
 
     check_bool("stale dispara cuando ambos condiciones se cumplen", decision.hay_reinicio());
     check_bool("stale tiene prioridad sobre diversity",
@@ -439,59 +506,43 @@ static void test_refinamiento_despues_del_cap() {
     config.restart_fraction = 0.8L;
     config.restart_mutation_share = 0.5L;
     config.restart_cap = 3;
-    ControlReinicio control(config);
+    ControlReinicio control(config, 0);
+    std::vector<FunbObj> poblacion = poblacion_generica();
 
     // Primer reinicio: fracción mínima 0.4. La primera llamada solo avanza el
     // contador; la segunda es la que dispara.
-    control.decidir(false, {});
-    const DecisionReinicio r1 = control.decidir(false, {});
+    paso(control, false, {}, poblacion);
+    const ResultadoReinicio r1 = paso(control, false, {}, poblacion);
     check_bool("primer reinicio dispara", r1.hay_reinicio());
     check_decimal("primer reinicio: fraccion 0.4", r1.parametros.fraccion, 0.4L);
 
     // Segundo reinicio: 0.6
-    control.decidir(false, {});
-    const DecisionReinicio r2 = control.decidir(false, {});
+    paso(control, false, {}, poblacion);
+    const ResultadoReinicio r2 = paso(control, false, {}, poblacion);
     check_bool("segundo reinicio dispara", r2.hay_reinicio());
     check_decimal("segundo reinicio: fraccion 0.6", r2.parametros.fraccion, 0.6L);
 
     // Tercer reinicio: 0.8
-    control.decidir(false, {});
-    const DecisionReinicio r3 = control.decidir(false, {});
+    paso(control, false, {}, poblacion);
+    const ResultadoReinicio r3 = paso(control, false, {}, poblacion);
     check_bool("tercer reinicio dispara", r3.hay_reinicio());
     check_decimal("tercer reinicio: fraccion 0.8", r3.parametros.fraccion, 0.8L);
 
     // Cuarto reinicio (después del cap=3): refinamiento
-    control.decidir(false, {});
-    const DecisionReinicio r4 = control.decidir(false, {});
+    paso(control, false, {}, poblacion);
+    const ResultadoReinicio r4 = paso(control, false, {}, poblacion);
     check_bool("cuarto reinicio dispara", r4.hay_reinicio());
     check_decimal("cuarto reinicio: fraccion refinamiento 0.2", r4.parametros.fraccion, 0.2L);
     check_decimal("cuarto reinicio: mutation_share 1.0", r4.parametros.cuota_mutacion, 1.0L);
 }
 
 // -------------------------------------------------------------------------
-// Seam (issue #168): reemplazo legacy de la poblacion detras de la costura del
-// modulo. `reiniciar_poblacion` recibe la poblacion nativa, el indice
-// reservado, el record historico y la configuracion de reinicio; la dimension
-// de los reemplazos se derive de la poblacion (no cruza config de busqueda).
-// En Python seria
-// `reemplazados = reiniciar_poblacion(poblacion, indice, record, config)`.
+// Seam (issues #168 y #170): reemplazo legacy de la poblacion detras de la
+// costura del modulo. La operacion unica recibe la poblacion nativa, el indice
+// reservado y el record historico; la dimension de los reemplazos se deriva de
+// la poblacion (no cruza config de busqueda). En Python seria
+// `resultado = control.reiniciar(False, [], poblacion, indice, record)`.
 // -------------------------------------------------------------------------
-
-// Individuos {TOKEN_MUL, k, TOKEN_X} (= k*x). Para k=1..5 su fitness en el
-// caso 0 crece con k; la dimension 3 tambien comprueba que no se use el
-// default de 20. En Python seria
-// `[FunbObj([TOKEN_MUL, k, TOKEN_X], 0, 1, 0) for k in constantes]`.
-static std::vector<FunbObj> poblacion_fixture(const std::vector<int>& constantes) {
-    std::vector<FunbObj> poblacion;
-    for (size_t i = 0; i < constantes.size(); i++) {
-        poblacion.push_back(FunbObj(
-            std::vector<ldouble>{static_cast<ldouble>(TOKEN_MUL),
-                                 static_cast<ldouble>(constantes[i]),
-                                 static_cast<ldouble>(TOKEN_X)},
-            0, 1, 0));
-    }
-    return poblacion;
-}
 
 // Atrapa: que el reemplazo legacy no respete la fraccion configurada, que
 // cambie el tamano de la poblacion o que use una dimension distinta a la de
@@ -512,12 +563,18 @@ static void test_reinicio_legacy_reemplaza_la_fraccion() {
     const int indice_record = 3;
     const std::vector<ldouble> record = poblacion[indice_record].vecvalue();
 
-    const ConfigReinicio config;  // restart_fraction = 0.8 por defecto
-    const int reemplazados =
-        reiniciar_poblacion(poblacion, indice_record, record, config, 0);
+    ConfigReinicio config;  // restart_fraction = 0.8 por defecto
+    config.stale_limit = 1;  // el primer paso sin mejora ya reinicia
+    ControlReinicio control(config, 0);
+
+    const ResultadoReinicio resultado =
+        control.reiniciar(false, {}, poblacion, indice_record, record);
+    const int reemplazados = resultado.reemplazados;
 
     check_int("legacy reemplaza el 80% de la poblacion (12 de 15)",
               reemplazados, 12);
+    check_int("el resultado cuenta los 3 sobrevivientes",
+              resultado.conservados, 3);
     check_int("legacy conserva el tamano de la poblacion",
               static_cast<int>(poblacion.size()), 15);
 
@@ -551,8 +608,10 @@ static void test_reinicio_legacy_restaura_el_record() {
     check_bool("el record simulado no es el individuo del indice reservado",
                poblacion[indice_record].vecvalue() != record);
 
-    const ConfigReinicio config;  // restart_fraction = 0.8 por defecto
-    reiniciar_poblacion(poblacion, indice_record, record, config, 0);
+    ConfigReinicio config;  // restart_fraction = 0.8 por defecto
+    config.stale_limit = 1;
+    ControlReinicio control(config, 0);
+    control.reiniciar(false, {}, poblacion, indice_record, record);
 
     check_bool("el indice reservado contiene exactamente el record restaurado",
                poblacion[indice_record].vecvalue() == record);
@@ -571,9 +630,12 @@ static void test_reinicio_legacy_sin_record_no_toca_el_indice_reservado() {
     const std::vector<ldouble> original = poblacion[indice_record].vecvalue();
     const std::vector<ldouble> sin_record;
 
-    const ConfigReinicio config;  // restart_fraction = 0.8 por defecto
-    const int reemplazados =
-        reiniciar_poblacion(poblacion, indice_record, sin_record, config, 0);
+    ConfigReinicio config;  // restart_fraction = 0.8 por defecto
+    config.stale_limit = 1;
+    ControlReinicio control(config, 0);
+    const ResultadoReinicio resultado =
+        control.reiniciar(false, {}, poblacion, indice_record, sin_record);
+    const int reemplazados = resultado.reemplazados;
 
     check_int("sin record legacy sigue reemplazando el 80% (8 de 10)",
               reemplazados, 8);
@@ -590,8 +652,16 @@ static void test_reinicio_adaptativo_conserva_los_mejores() {
     const auto cuarto = poblacion[4].vecvalue();
     const auto quinto = poblacion[2].vecvalue();
 
-    const int reemplazados = reiniciar_poblacion_adaptativo(
-        poblacion, primero, {0.4L, 0.5L}, 0);
+    ConfigReinicio config;
+    config.restart_mode = ModoReinicio::adaptive;
+    config.stale_limit = 1;
+    config.restart_min_fraction = 0.4L;
+    config.restart_fraction = 0.4L;
+    config.restart_mutation_share = 0.5L;
+    ControlReinicio control(config, 0);
+    const ResultadoReinicio resultado =
+        control.reiniciar(false, {}, poblacion, 0, primero);
+    const int reemplazados = resultado.reemplazados;
 
     check_int("adaptive reemplaza 2 de 5", reemplazados, 2);
     check_int("adaptive conserva el tamano", static_cast<int>(poblacion.size()), 5);
@@ -612,10 +682,17 @@ static void test_reinicio_adaptativo_inyecta_el_record() {
     const auto peor = poblacion[2].vecvalue();
     const std::vector<ldouble> record = {TOKEN_ADD, TOKEN_CONST1, TOKEN_X};
 
-    const int reemplazados = reiniciar_poblacion_adaptativo(
-        poblacion, record, {0.5L, 0.5L}, 0);
+    ConfigReinicio config;
+    config.restart_mode = ModoReinicio::adaptive;
+    config.stale_limit = 1;
+    config.restart_min_fraction = 0.5L;
+    config.restart_fraction = 0.5L;
+    config.restart_mutation_share = 0.5L;
+    ControlReinicio control(config, 0);
+    const ResultadoReinicio resultado =
+        control.reiniciar(false, {}, poblacion, 0, record);
 
-    check_int("el record cuenta entre 2 reemplazos", reemplazados, 2);
+    check_int("el record cuenta entre 2 reemplazos", resultado.reemplazados, 2);
     check_bool("la inyeccion conserva los dos mejores",
                poblacion[1].vecvalue() == primero && poblacion[0].vecvalue() == segundo);
     check_bool("el record ocupa un lugar reemplazado", poblacion[3].vecvalue() == record);
@@ -627,10 +704,18 @@ static void test_reinicio_adaptativo_inyecta_el_record_sin_cupo() {
     const auto mejor = poblacion[1].vecvalue();
     const std::vector<ldouble> record = {TOKEN_ADD, TOKEN_CONST1, TOKEN_X};
 
-    const int reemplazados = reiniciar_poblacion_adaptativo(
-        poblacion, record, {0.4L, 0.5L}, 0);
+    ConfigReinicio config;
+    config.restart_mode = ModoReinicio::adaptive;
+    config.stale_limit = 1;
+    config.restart_min_fraction = 0.4L;
+    config.restart_fraction = 0.4L;
+    config.restart_mutation_share = 0.5L;
+    ControlReinicio control(config, 0);
+    const ResultadoReinicio resultado =
+        control.reiniciar(false, {}, poblacion, 0, record);
 
-    check_int("sin cupo el record cuenta como un reemplazo", reemplazados, 1);
+    check_int("sin cupo el record cuenta como un reemplazo",
+              resultado.reemplazados, 1);
     check_bool("sin cupo el mejor se conserva y el record desplaza al peor",
                poblacion[1].vecvalue() == mejor && poblacion[0].vecvalue() == record);
 }
@@ -669,8 +754,16 @@ static void test_reinicio_adaptativo_compone_reemplazos_hibridos() {
             record = {TOKEN_ADD, TOKEN_CONST1, TOKEN_X};
             record.resize(20, TOKEN_CONST1);
         }
-        const int reemplazados = reiniciar_poblacion_adaptativo(
-            poblacion, record, {0.4L, escenario.cuota}, 0);
+        ConfigReinicio config;
+        config.restart_mode = ModoReinicio::adaptive;
+        config.stale_limit = 1;
+        config.restart_min_fraction = 0.4L;
+        config.restart_fraction = 0.4L;
+        config.restart_mutation_share = escenario.cuota;
+        ControlReinicio control(config, 0);
+        const ResultadoReinicio resultado =
+            control.reiniciar(false, {}, poblacion, 0, record);
+        const int reemplazados = resultado.reemplazados;
 
         std::vector<int> sobrevivientes;
         std::vector<int> cambiados;
@@ -707,6 +800,144 @@ static void test_reinicio_adaptativo_compone_reemplazos_hibridos() {
     }
 }
 
+// Seam (issue #170): una sola llamada por generacion decide y aplica el
+// reemplazo legacy, y devuelve el resultado completo que consume el log.
+// Atrapa: que el bucle DE siga necesitando decidir() + reemplazo por separado.
+static void test_operacion_unica_legacy_encapsula_decision_y_reemplazo() {
+    srand(20261026);
+
+    ConfigReinicio config;
+    config.restart_mode = ModoReinicio::legacy;
+    config.stale_limit = 2;
+    config.restart_fraction = 0.5L;
+    ControlReinicio control(config, 0);
+
+    std::vector<FunbObj> poblacion = poblacion_fixture({1, 2, 3, 4});
+    const std::vector<ldouble> record;
+    const int indice_record = 1;
+
+    const ResultadoReinicio primera =
+        control.reiniciar(false, {}, poblacion, indice_record, record);
+    check_bool("la operacion unica no reinicia antes del limite",
+               !primera.hay_reinicio());
+    check_int("sin reinicio no hay reemplazos", primera.reemplazados, 0);
+
+    const std::vector<ldouble> antes = poblacion[0].vecvalue();
+    const ResultadoReinicio segunda =
+        control.reiniciar(false, {}, poblacion, indice_record, record);
+    check_bool("la operacion unica dispara stale en el limite",
+               segunda.hay_reinicio());
+    check_bool("el resultado conserva trigger=stale",
+               segunda.disparador == DisparadorReinicio::stale);
+    check_int("el resultado conserva stagnant_gens",
+              segunda.generaciones_sin_mejora, 2);
+    check_decimal("el resultado conserva fraction",
+                  segunda.parametros.fraccion, 0.5L);
+    check_int("el resultado cuenta replaced", segunda.reemplazados, 2);
+    check_int("el resultado cuenta kept", segunda.conservados, 2);
+    check_bool("la operacion unica ya aplico el reemplazo",
+               poblacion[0].vecvalue() != antes);
+}
+
+// Seam (issue #170): secuencia legacy completa con semilla fija. Compara el
+// trigger, la ventana, la fraccion, los conteos y los vectores resultantes
+// generacion a generacion a traves de la operacion unica. Los valores
+// esperados se capturaron de la implementacion anterior al refactor, asi que
+// una alteracion del orden de rand() o del reemplazo rompe el test.
+// En Python seria una lista de `(trigger, stagnant, replaced, kept, vectores)`.
+static void test_regresion_legacy_secuencia_con_semilla_fija() {
+    srand(20261026);
+
+    ConfigReinicio config;
+    config.restart_mode = ModoReinicio::legacy;
+    config.stale_limit = 2;
+    config.restart_fraction = 0.5L;
+    ControlReinicio control(config, 0);
+
+    std::vector<FunbObj> poblacion = poblacion_fixture({1, 2, 3, 4});
+    const int indice_record = 1;
+    std::vector<ldouble> record;
+
+    const ResultadoReinicio gen1 =
+        control.reiniciar(false, {}, poblacion, indice_record, record);
+    check_bool("regresion gen1: sin reinicio", !gen1.hay_reinicio());
+    check_vector("regresion gen1: poblacion inicial",
+                 poblacion[0].vecvalue(),
+                 {TOKEN_MUL, TOKEN_CONST1, TOKEN_X});
+    check_vector("regresion gen1: segundo individuo",
+                 poblacion[1].vecvalue(),
+                 {TOKEN_MUL, TOKEN_CONST2, TOKEN_X});
+    check_vector("regresion gen1: tercer individuo",
+                 poblacion[2].vecvalue(),
+                 {TOKEN_MUL, TOKEN_CONST3, TOKEN_X});
+    check_vector("regresion gen1: cuarto individuo",
+                 poblacion[3].vecvalue(),
+                 {TOKEN_MUL, TOKEN_CONST4, TOKEN_X});
+
+    const ResultadoReinicio gen2 =
+        control.reiniciar(false, {}, poblacion, indice_record, record);
+    check_bool("regresion gen2: stale en el limite", gen2.hay_reinicio() &&
+               gen2.disparador == DisparadorReinicio::stale);
+    check_int("regresion gen2: stagnant_gens", gen2.generaciones_sin_mejora, 2);
+    check_decimal("regresion gen2: fraction", gen2.parametros.fraccion, 0.5L);
+    check_int("regresion gen2: replaced", gen2.reemplazados, 2);
+    check_int("regresion gen2: kept", gen2.conservados, 2);
+    check_vector("regresion gen2: primer reemplazo", poblacion[0].vecvalue(),
+                 {TOKEN_X, TOKEN_X, TOKEN_CONST8});
+    check_vector("regresion gen2: indice reservado intacto",
+                 poblacion[1].vecvalue(),
+                 {TOKEN_MUL, TOKEN_CONST2, TOKEN_X});
+    check_vector("regresion gen2: segundo reemplazo", poblacion[2].vecvalue(),
+                 {TOKEN_X, TOKEN_CONST1, TOKEN_X});
+    check_vector("regresion gen2: sobreviviente final", poblacion[3].vecvalue(),
+                 {TOKEN_MUL, TOKEN_CONST4, TOKEN_X});
+
+    record = {TOKEN_ADD, TOKEN_CONST1, TOKEN_X};
+    const ResultadoReinicio gen3 =
+        control.reiniciar(true, {}, poblacion, indice_record, record);
+    check_bool("regresion gen3: new_best no reinicia", !gen3.hay_reinicio());
+    check_vector("regresion gen3: poblacion sin cambios",
+                 poblacion[0].vecvalue(),
+                 {TOKEN_X, TOKEN_X, TOKEN_CONST8});
+
+    const ResultadoReinicio gen4 =
+        control.reiniciar(false, {}, poblacion, indice_record, record);
+    check_bool("regresion gen4: debajo del limite", !gen4.hay_reinicio());
+
+    const ResultadoReinicio gen5 =
+        control.reiniciar(false, {}, poblacion, indice_record, record);
+    check_bool("regresion gen5: stale tras el reset", gen5.hay_reinicio() &&
+               gen5.disparador == DisparadorReinicio::stale);
+    check_int("regresion gen5: stagnant_gens", gen5.generaciones_sin_mejora, 2);
+    check_int("regresion gen5: replaced", gen5.reemplazados, 2);
+    check_int("regresion gen5: kept", gen5.conservados, 2);
+    check_vector("regresion gen5: primer reemplazo", poblacion[0].vecvalue(),
+                 {TOKEN_COSH, TOKEN_X, TOKEN_X});
+    check_vector("regresion gen5: record restaurado",
+                 poblacion[1].vecvalue(),
+                 {TOKEN_ADD, TOKEN_CONST1, TOKEN_X});
+    check_vector("regresion gen5: segundo reemplazo", poblacion[2].vecvalue(),
+                 {TOKEN_TANH, TOKEN_X, TOKEN_X});
+
+    const ResultadoReinicio gen6 =
+        control.reiniciar(false, {}, poblacion, indice_record, record);
+    check_bool("regresion gen6: debajo del limite", !gen6.hay_reinicio());
+
+    const ResultadoReinicio gen7 =
+        control.reiniciar(false, {}, poblacion, indice_record, record);
+    check_bool("regresion gen7: stale en el limite", gen7.hay_reinicio() &&
+               gen7.disparador == DisparadorReinicio::stale);
+    check_int("regresion gen7: replaced", gen7.reemplazados, 2);
+    check_int("regresion gen7: kept", gen7.conservados, 2);
+    check_vector("regresion gen7: primer reemplazo", poblacion[0].vecvalue(),
+                 {TOKEN_COSH, TOKEN_X, TOKEN_CONST8});
+    check_vector("regresion gen7: record restaurado",
+                 poblacion[1].vecvalue(),
+                 {TOKEN_ADD, TOKEN_CONST1, TOKEN_X});
+    check_vector("regresion gen7: segundo reemplazo", poblacion[2].vecvalue(),
+                 {TOKEN_DIV, TOKEN_CONST7, TOKEN_X});
+}
+
 static void test_reinicio_adaptativo_muta_uno_o_dos_tokens() {
     srand(20261020);
     std::vector<ldouble> elite(20, TOKEN_CONST1);
@@ -716,8 +947,16 @@ static void test_reinicio_adaptativo_muta_uno_o_dos_tokens() {
     for (int i = 0; i < 40; i++) {
         poblacion.emplace_back(std::vector<ldouble>(20, TOKEN_CONST1), 0, 1, 0);
     }
-    const int reemplazados = reiniciar_poblacion_adaptativo(
-        poblacion, elite, {1.0L, 1.0L}, 0);
+    ConfigReinicio config;
+    config.restart_mode = ModoReinicio::adaptive;
+    config.stale_limit = 1;
+    config.restart_min_fraction = 1.0L;
+    config.restart_fraction = 1.0L;
+    config.restart_mutation_share = 1.0L;
+    ControlReinicio control(config, 0);
+    const ResultadoReinicio resultado =
+        control.reiniciar(false, {}, poblacion, 0, elite);
+    const int reemplazados = resultado.reemplazados;
     int minimo = 20;
     int maximo = 0;
     for (size_t i = 1; i < poblacion.size(); i++) {
@@ -731,7 +970,8 @@ static void test_reinicio_adaptativo_muta_uno_o_dos_tokens() {
 
     std::vector<FunbObj> cortos = {
         FunbObj({TOKEN_X}, 0, 1, 0), FunbObj({TOKEN_CONST1}, 0, 1, 0)};
-    reiniciar_poblacion_adaptativo(cortos, {TOKEN_X}, {1.0L, 1.0L}, 0);
+    ControlReinicio control_cortos(config, 0);
+    control_cortos.reiniciar(false, {}, cortos, 0, {TOKEN_X});
     check_int("una elite de un token produce un cambio",
               distancia_hamming(cortos[0].vecvalue(), cortos[1].vecvalue()), 1);
 }
@@ -758,6 +998,8 @@ int main() {
     test_reinicio_adaptativo_inyecta_el_record_sin_cupo();
     test_reinicio_adaptativo_compone_reemplazos_hibridos();
     test_reinicio_adaptativo_muta_uno_o_dos_tokens();
+    test_operacion_unica_legacy_encapsula_decision_y_reemplazo();
+    test_regresion_legacy_secuencia_con_semilla_fija();
     std::cout << (g_fallos == 0 ? "OK" : "FALLARON") << ": "
               << (g_checks - g_fallos) << "/" << g_checks << " asserts\n";
     return g_fallos == 0 ? 0 : 1;
