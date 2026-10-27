@@ -6,12 +6,9 @@
 // final hace de resumen (seria el `pytest.main()` + exit code). El binario
 // termina con codigo != 0 si algo fallo, igual que pytest.
 //
-// Se compila con -DODE_NO_MAIN (apaga el main() del programa y deja el de este
-// archivo) y junto con dualfunctions.cpp; parse_tree.cpp se incluye mas abajo
-// en vez de enlazarse, porque FunbObj no tiene header (ver el comentario del
-// include).
-// En Python no existe "dos main() en un mismo binario": aqui el preprocesador
-// `#ifndef ODE_NO_MAIN` del programa deja al compilador elegir que main() incluir.
+// Enlaza funbobj.cpp y dualfunctions.cpp (issue #158): FunbObj y x_rango viven
+// tras funbobj.h, asi que el test ya no compila el bucle DE ni necesita
+// ODE_NO_MAIN.
 
 #include <iostream>
 #include <iomanip>
@@ -21,14 +18,13 @@
 
 #include "dualfunctions.h"  // ahora autocontenido: incluye <vector>/<string> por si mismo
 
-// En vez de declarar prototipos de funciones sueltas (como hacen test_mutation
-// y test_crossover), este test incluye parse_tree.cpp entero: x_rango y
-// FunbObj viven ahi sin header, y copiar la clase (con sus miembros privados)
-// podria desincronizarse en silencio. Incluyendo el .cpp, el test compila el
-// codigo real; el main() del programa queda fuera por -DODE_NO_MAIN (ver el
-// target en el Makefile). En Python seria como `from parse_tree import
-// x_rango, FunbObj`: importar el modulo real, no reescribirlo.
-#include "parse_tree.cpp"
+// Los dos modulos bajo prueba viven tras funbobj.h (issue #157): FunbObj y
+// x_rango. Desde #158 el test enlaza funbobj.cpp y dualfunctions.cpp y ya no
+// compila parse_tree.cpp, asi que no necesita ODE_NO_MAIN.
+#include "funbobj.h"
+// token.h es la fuente de verdad de TOKEN_X2/TOKEN_ADD/TOKEN_X3, que antes
+// llegaban de rebote al incluir parse_tree.cpp.
+#include "token.h"
 
 // -------------------------------------------------------------------------
 // Arnes minimo (mismo estilo que test_dual/test_mutation/test_crossover):
@@ -89,23 +85,23 @@ static void check_bool(const std::string& nombre, bool cond) {
 static void test_x_rango_cantidad_de_puntos() {
     // El tercer argumento es un conteo: con 100 se obtienen exactamente 100
     // puntos (no 101, como daria un paso fijo de 0.01 en un intervalo cerrado).
-    const vector<vector<long double>> pts100 = x_rango(0.0L, 1.0L, 100);
+    const std::vector<std::vector<long double>> pts100 = x_rango(0.0L, 1.0L, 100);
     check_int("x_rango(0,1,100) produce 100 puntos",
               static_cast<int>(pts100.size()), 100);
     // El mismo contrato con otro conteo: la rejilla historica de 11 puntos.
-    const vector<vector<long double>> pts11 = x_rango(0.0L, 1.0L, 11);
+    const std::vector<std::vector<long double>> pts11 = x_rango(0.0L, 1.0L, 11);
     check_int("x_rango(0,1,11) produce 11 puntos",
               static_cast<int>(pts11.size()), 11);
 }
 
 static void test_x_rango_extremos_incluidos() {
-    vector<vector<long double>> pts = x_rango(0.0L, 1.0L, 100);
+    std::vector<std::vector<long double>> pts = x_rango(0.0L, 1.0L, 100);
     check_ld("primer punto es x=0", pts.front()[0], 0.0L);
     check_ld("ultimo punto es x=1", pts.back()[0], 1.0L);
 }
 
 static void test_x_rango_espaciado_uniforme() {
-    vector<vector<long double>> pts = x_rango(0.0L, 1.0L, 100);
+    std::vector<std::vector<long double>> pts = x_rango(0.0L, 1.0L, 100);
     // x_i = i/99 (paso 1/99 ≈ 0.0101, el "0.01 o similar" del issue). El
     // valor esperado se calcula aqui mismo a partir de la especificacion.
     bool uniforme = true;
@@ -119,7 +115,7 @@ static void test_x_rango_espaciado_uniforme() {
 static void test_x_rango_triple_dual() {
     // Cada punto es el 2dual [x, 1, 0]: x con dx/dx=1 y d2x/dx2=0 (eq. (14)
     // del paper). Toda la evaluacion de fitness depende de esta convencion.
-    vector<vector<long double>> pts = x_rango(0.0L, 1.0L, 100);
+    std::vector<std::vector<long double>> pts = x_rango(0.0L, 1.0L, 100);
     bool convencion = true;
     for (size_t i = 0; i < pts.size(); i++) {
         if (pts[i].size() != 3 || pts[i][1] != 1.0L || pts[i][2] != 0.0L) {
