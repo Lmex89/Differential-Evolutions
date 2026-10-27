@@ -858,7 +858,11 @@ static void test_config_defaults() {
     // Mismo patron que resolver_semilla: la funcion recibe los getenv() ya
     // resueltos (nullptr = variable ausente) para poder probarse sin tocar el
     // entorno del proceso.
-    ConfigBusqueda config = resolver_config(nullptr, nullptr, nullptr, nullptr);
+    ConfigBusqueda config;
+    ConfigReinicio config_reinicio;
+    resolver_config(nullptr, nullptr, nullptr, nullptr, 0,
+                    nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                    config, config_reinicio);
 
     // Los literales 100/20/5000 vienen del paper (Caso 1), no de la
     // implementacion: son la fuente de verdad independiente del test.
@@ -872,7 +876,11 @@ static void test_config_defaults() {
 static void test_config_overrides() {
     // Cada variable de entorno pisa su default (equivalente a leer
     // os.environ["ODE_POP"], etc.). "0" en la bandera desactiva el warm start.
-    ConfigBusqueda config = resolver_config("50", "30", "77", "0");
+    ConfigBusqueda config;
+    ConfigReinicio config_reinicio;
+    resolver_config("50", "30", "77", "0", 0,
+                    nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                    config, config_reinicio);
 
     check_int("ODE_POP=50 sobreescribe la poblacion", config.poblacion, 50);
     check_int("ODE_DIM=30 sobreescribe la dimension", config.dimension, 30);
@@ -880,7 +888,11 @@ static void test_config_overrides() {
     check_bool("ODE_WARM_START=0 desactiva el warm start", !config.warm_start);
 
     // Con la dimension por defecto (20) el warm start si se acepta.
-    ConfigBusqueda caliente = resolver_config(nullptr, nullptr, nullptr, "1");
+    ConfigBusqueda caliente;
+    ConfigReinicio config_reinicio2;
+    resolver_config(nullptr, nullptr, nullptr, "1", 0,
+                    nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                    caliente, config_reinicio2);
     check_bool("ODE_WARM_START=1 activa el warm start con dimension 20",
                caliente.warm_start);
 }
@@ -889,7 +901,11 @@ static void test_config_invalida_usa_respaldo() {
     // "abc" y "" no son numeros, "0" esta por debajo del minimo de
     // generaciones y "tal vez" no es una bandera: cada valor invalido cae a su
     // respaldo, la misma regla que usa resolver_semilla con ODE_SEED.
-    ConfigBusqueda config = resolver_config("abc", "", "0", "tal vez");
+    ConfigBusqueda config;
+    ConfigReinicio config_reinicio;
+    resolver_config("abc", "", "0", "tal vez", 0,
+                    nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                    config, config_reinicio);
 
     check_int("ODE_POP invalida usa el default 100", config.poblacion, 100);
     check_int("ODE_DIM invalida usa el default 20", config.dimension, 20);
@@ -899,25 +915,49 @@ static void test_config_invalida_usa_respaldo() {
 
     // Una poblacion menor que 4 no puede elegir 3 individuos base distintos
     // del objetivo (indices_distintos): el minimo aceptado es 4.
+    ConfigBusqueda config3;
+    ConfigReinicio config_reinicio3;
+    resolver_config("3", nullptr, nullptr, nullptr, 0,
+                    nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                    config3, config_reinicio3);
     check_int("ODE_POP=3 queda por debajo del minimo y usa el default",
-              resolver_config("3", nullptr, nullptr, nullptr).poblacion, 100);
+              config3.poblacion, 100);
+
+    ConfigBusqueda config4;
+    ConfigReinicio config_reinicio4;
+    resolver_config("4", nullptr, nullptr, nullptr, 0,
+                    nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                    config4, config_reinicio4);
     check_int("ODE_POP=4 es aceptable",
-              resolver_config("4", nullptr, nullptr, nullptr).poblacion, 4);
+              config4.poblacion, 4);
 
     // "17abc" no es un entero puro: se rechaza entero en vez de quedarse con 17.
+    ConfigBusqueda config17;
+    ConfigReinicio config_reinicio17;
+    resolver_config("17abc", nullptr, nullptr, nullptr, 0,
+                    nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                    config17, config_reinicio17);
     check_int("un texto a medias no es un entero valido",
-              resolver_config("17abc", nullptr, nullptr, nullptr).poblacion, 100);
+              config17.poblacion, 100);
 }
 
 static void test_warm_start_cualquier_dimension() {
     // El warm start ya no depende de que la dimension sea 20: las entradas del
     // catalogo se rellenan con constantes 1 hasta la dimension configurada.
-    ConfigBusqueda config = resolver_config(nullptr, "30", nullptr, "1");
+    ConfigBusqueda config;
+    ConfigReinicio config_reinicio;
+    resolver_config(nullptr, "30", nullptr, "1", 0,
+                    nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                    config, config_reinicio);
 
     check_int("la dimension pedida se conserva (30)", config.dimension, 30);
     check_bool("ODE_WARM_START=1 se respeta con ODE_DIM=30", config.warm_start);
 
-    ConfigBusqueda dim25 = resolver_config(nullptr, "25", nullptr, "1");
+    ConfigBusqueda dim25;
+    ConfigReinicio config_reinicio2;
+    resolver_config(nullptr, "25", nullptr, "1", 0,
+                    nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                    dim25, config_reinicio2);
     check_bool("ODE_WARM_START=1 se respeta con ODE_DIM=25", dim25.warm_start);
 }
 
@@ -949,7 +989,8 @@ static void test_reinicio_reemplaza_el_80_por_ciento() {
     const int indice_record = 3;
     const vector<ldouble> record = poblacion[indice_record].vecvalue();
 
-    const int reemplazados = reiniciar_poblacion(poblacion, indice_record, record, config, 0);
+    ConfigReinicio config_reinicio;
+    const int reemplazados = reiniciar_poblacion(poblacion, indice_record, record, config, config_reinicio, 0);
 
     check_int("el reinicio reemplaza el 80% de la poblacion (12 de 15)", reemplazados, 12);
     check_bool("el reinicio conserva el tamano de la poblacion", poblacion.size() == 15);
@@ -980,7 +1021,8 @@ static void test_reinicio_restaura_el_record() {
     check_bool("el record simulado no es el individuo del indice reservado",
                poblacion[indice_record].vecvalue() != record);
 
-    reiniciar_poblacion(poblacion, indice_record, record, config, 0);
+    ConfigReinicio config_reinicio;
+    reiniciar_poblacion(poblacion, indice_record, record, config, config_reinicio, 0);
 
     check_bool("el indice reservado contiene exactamente el record restaurado",
                poblacion[indice_record].vecvalue() == record);
@@ -1000,7 +1042,8 @@ static void test_reinicio_sin_record_no_toca_el_indice_reservado() {
     const vector<ldouble> original = poblacion[indice_record].vecvalue();
     const vector<ldouble> sin_record;
 
-    const int reemplazados = reiniciar_poblacion(poblacion, indice_record, sin_record, config, 0);
+    ConfigReinicio config_reinicio;
+    const int reemplazados = reiniciar_poblacion(poblacion, indice_record, sin_record, config, config_reinicio, 0);
 
     check_int("sin record el reinicio sigue reemplazando el 80% (8 de 10)", reemplazados, 8);
     check_bool("sin record el indice reservado queda intacto",

@@ -8,7 +8,7 @@
 // Se compila con -DODE_NO_MAIN y junto con dualfunctions.cpp y semilla.cpp;
 // parse_tree.cpp se incluye mas abajo (FunbObj no tiene header), el mismo
 // patron que test_population.cpp. En Python seria
-// `from parse_tree import EscaladorReinicio, ConfigBusqueda`.
+// `from parse_tree import EscaladorReinicio, ConfigReinicio`.
 
 #include <iostream>
 #include <string>
@@ -48,7 +48,7 @@ static void check_decimal(const std::string& nombre, long double recibido,
 // se respeta o la degradacion a refinamiento llega antes/despues del cap.
 // -------------------------------------------------------------------------
 static void test_escalado_secuencia_por_defecto() {
-    const ConfigBusqueda config;  // defaults: min 0.4, cap 0.8, limite 3, share 0.5
+    const ConfigReinicio config;  // defaults: min 0.4, cap 0.8, limite 3, share 0.5
     EscaladorReinicio escalador;
 
     // Primer reinicio del episodio: fraccion minima, composicion hibrida.
@@ -90,7 +90,7 @@ static void test_escalado_secuencia_por_defecto() {
 // Atrapa: valores de configuracion ignorados o formula hardcodeada.
 // -------------------------------------------------------------------------
 static void test_escalado_respeta_la_configuracion() {
-    ConfigBusqueda config;
+    ConfigReinicio config;
     config.restart_min_fraction = 0.6L;
     config.restart_fraction = 0.7L;  // tope: 0.6 + 0.2 ya lo supera
     config.restart_cap = 3;
@@ -128,7 +128,7 @@ static void test_escalado_respeta_la_configuracion() {
 // Atrapa: el contador de reinicios consecutivos no se resetea o queda a medias.
 // -------------------------------------------------------------------------
 static void test_nuevo_record_reinicia_la_escalera() {
-    const ConfigBusqueda config;
+    const ConfigReinicio config;
     EscaladorReinicio escalador;
 
     // Subimos dos escalones: 0.4 y 0.6.

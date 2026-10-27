@@ -66,7 +66,7 @@ static ResumenDiversidad resumen_colapsado() {
 // de decision no distinga "no reinicio" de un reinicio real.
 // -------------------------------------------------------------------------
 static void test_primera_generacion_sin_reinicio() {
-    const ConfigBusqueda config;
+    const ConfigReinicio config;
     ControlReinicio control(config);
 
     // Primera generacion sin record nuevo y sin resumen de diversidad: en
@@ -85,7 +85,7 @@ static void test_primera_generacion_sin_reinicio() {
 // Atrapa: reiniciar antes de tiempo o no llevar el contador correctamente.
 // -------------------------------------------------------------------------
 static void test_sin_reinicio_debajo_del_limite() {
-    ConfigBusqueda config;
+    ConfigReinicio config;
     config.stale_limit = 5;  // Límite corto para probar el tracking
     ControlReinicio control(config);
 
@@ -106,7 +106,7 @@ static void test_sin_reinicio_debajo_del_limite() {
 // Atrapa: disparar diversidad sin cumplir los guards o saltarse el conteo.
 // -------------------------------------------------------------------------
 static void test_adaptive_bajo_limite_con_guardas_fallando() {
-    ConfigBusqueda config;
+    ConfigReinicio config;
     config.restart_mode = ModoReinicio::adaptive;
     config.stale_limit = 5;
     config.div_threshold = 0.1L;
@@ -140,7 +140,7 @@ static void test_adaptive_bajo_limite_con_guardas_fallando() {
 // contador tras el reinicio.
 // -------------------------------------------------------------------------
 static void test_reinicio_en_el_limite_stale() {
-    ConfigBusqueda config;
+    ConfigReinicio config;
     config.stale_limit = 5;
     ControlReinicio control(config);
 
@@ -174,7 +174,7 @@ static void test_reinicio_en_el_limite_stale() {
 // Atrapa: que nuevo_record solo resetee una de las dos cosas, o ninguna.
 // -------------------------------------------------------------------------
 static void test_nuevo_record_reinicia_ventana_y_escalera() {
-    ConfigBusqueda config;
+    ConfigReinicio config;
     // La escalera solo existe en adaptive; legacy usa restart_fraction fija.
     config.restart_mode = ModoReinicio::adaptive;
     config.stale_limit = 3;
@@ -217,7 +217,7 @@ static void test_nuevo_record_reinicia_ventana_y_escalera() {
 // o que se dispare sin haber tenido un new_best previo.
 // -------------------------------------------------------------------------
 static void test_diversidad_dispara_en_modo_adaptive() {
-    ConfigBusqueda config;
+    ConfigReinicio config;
     config.restart_mode = ModoReinicio::adaptive;
     config.stale_limit = 10;  // Lo suficientemente alto para que no dispar stale
     config.div_threshold = 0.1L;
@@ -242,7 +242,7 @@ static void test_diversidad_dispara_en_modo_adaptive() {
 // Atrapa: no resetear `generaciones_sin_mejora_` tras diversity.
 // -------------------------------------------------------------------------
 static void test_diversidad_resetea_estancamiento() {
-    ConfigBusqueda config;
+    ConfigReinicio config;
     config.restart_mode = ModoReinicio::adaptive;
     config.stale_limit = 10;
     config.div_threshold = 0.1L;
@@ -286,7 +286,7 @@ static void test_diversidad_resetea_estancamiento() {
 // Atrapa: que se dispare diversidad en modo legacy.
 // -------------------------------------------------------------------------
 static void test_legacy_suprime_diversidad() {
-    ConfigBusqueda config;
+    ConfigReinicio config;
     config.restart_mode = ModoReinicio::legacy;
     config.stale_limit = 10;
     config.div_threshold = 0.1L;
@@ -308,7 +308,7 @@ static void test_legacy_suprime_diversidad() {
 // Atrapa: que la decision legacy consuma el escalador y devuelva 0.4/0.2.
 // -------------------------------------------------------------------------
 static void test_legacy_no_consume_el_escalador() {
-    ConfigBusqueda config;
+    ConfigReinicio config;
     config.restart_mode = ModoReinicio::legacy;
     config.stale_limit = 2;
     config.restart_fraction = 0.8L;
@@ -339,7 +339,7 @@ static void test_legacy_no_consume_el_escalador() {
 // Atrapa: que se dispare diversity cuando stale también debería disparar.
 // -------------------------------------------------------------------------
 static void test_stale_tiene_prioridad_sobre_diversity() {
-    ConfigBusqueda config;
+    ConfigReinicio config;
     config.restart_mode = ModoReinicio::adaptive;
     config.stale_limit = 3;
     config.div_threshold = 0.1L;
@@ -368,7 +368,7 @@ static void test_stale_tiene_prioridad_sobre_diversity() {
 // Atrapa: que no se escalone a refinamiento, o que los valores sean incorrectos.
 // -------------------------------------------------------------------------
 static void test_refinamiento_despues_del_cap() {
-    ConfigBusqueda config;
+    ConfigReinicio config;
     config.restart_mode = ModoReinicio::adaptive;
     config.stale_limit = 2;
     config.restart_min_fraction = 0.4L;
