@@ -83,6 +83,15 @@ class FunbObj{
     // en C++ el move evita el overhead de copiar el vector completo.
     FunbObj(std::vector<ldouble> vecval, ldouble start, ldouble stop,
             int caso = 0);
+    
+    // create_random (issue #165): factory method que construye un Individual
+    // aleatorio completo con la dimension y caso especificados. Implementa las
+    // reglas de construccion: primer token operador (aridad > 0), sorteo
+    // uniforme del resto, y reparacion x-dependence (inyecta TOKEN_X si no
+    // existe). Es el unico camino de construccion aleatoria para el modulo
+    // Individual, usado por createPopulation y los reinicios legacy/adaptive.
+    // En Python seria `@classmethod def create_random(cls, dimension, caso)`.
+    static FunbObj create_random(int dimension, int caso);
     // Accesores const (Con.2): represant() y vecvalue() solo leen el estado
     // del individuo; fitness() es const y cachea su resultado en los miembros
     // mutable de arriba. En Python serian @property y @cached_property.

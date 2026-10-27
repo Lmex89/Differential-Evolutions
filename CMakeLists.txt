@@ -122,3 +122,17 @@ endforeach()
 add_executable(test_header_hygiene tests/test_header_hygiene.cpp)
 target_include_directories(test_header_hygiene PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_test(NAME test_header_hygiene COMMAND test_header_hygiene)
+
+# =========================================================================
+# test_individual_random (issue #165): construcción aleatoria de Individuals
+# en el módulo FunbObj. Factory method `create_random(dimension, caso)`.
+# =========================================================================
+add_executable(test_individual_random
+    tests/test_individual_random.cpp
+    src/funbobj.cpp
+    src/dualfunctions.cpp
+)
+target_compile_features(test_individual_random PRIVATE cxx_std_17)
+target_compile_options(test_individual_random PRIVATE -Wall)
+target_include_directories(test_individual_random PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+add_test(NAME test_individual_random COMMAND test_individual_random)

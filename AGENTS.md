@@ -22,7 +22,7 @@
   historical files in `docs/legacy/` (the backup
   `docs/legacy/parse_tree_bckp.cpp` and the notebook
   `docs/legacy/Untitled.ipynb`).
-- `ctest --test-dir build` builds and runs the 15 C++ tests registered in
+- `ctest --test-dir build` builds and runs the 16 C++ tests registered in
   `CMakeLists.txt`: each test file under `tests/` is its own executable, and
   its exit code is nonzero exactly when an assert fails (the same contract
   as pytest). For a focused test, build its target and run it directly:
@@ -147,8 +147,9 @@
   `ODE_LOG`/`ODE_LOG_FILE` to a mode and path, and `RedireccionSalida` is the
   RAII redirect that swaps `std::cout` once at startup and restores it on
   exit.
-- The three fitness tests (`tests/test_funbobj_const.cpp`,
-  `tests/test_grid.cpp`, `tests/test_ode_cases.cpp`) include `funbobj.h`
+- The four fitness tests (`tests/test_funbobj_const.cpp`,
+  `tests/test_grid.cpp`, `tests/test_ode_cases.cpp`,
+  `tests/test_individual_random.cpp`) include `funbobj.h`
   (issue #158) and link only `src/funbobj.cpp` and its `src/dualfunctions.cpp`
   dependency; their CMake rules carry no `ODE_NO_MAIN` and no
   `src/semilla.cpp`.

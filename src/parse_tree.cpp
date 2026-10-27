@@ -286,44 +286,6 @@ ConfigBusqueda resolver_config(const char* pop_env, const char* dim_env,
     return config;
 }
 
-// vector_population: un individuo aleatorio de exactamente `tam` tokens.
-// La longitud la manda la configuracion (dimension del paper: 20) porque
-// Mutation()/Recombination() emparejan genes por posicion: longitudes
-// dispares leian fuera de rango (B5 de REVIEW.md). En Python seria
-// `[random.randint(TOKEN_MIN, TOKEN_MAX) for _ in range(tam)]`; en C++
-// `random_token()` concentra esa regla en token.h.
-vector<long double> vector_population(int tam){
-    // Precondicion: tam >= 1 para evitar division por cero en rand() % tam.
-    // Con tam == 0, el bucle de inyeccion de TOKEN_X divide por cero. En Python
-    // seria `assert tam >= 1, "individual requires at least 1 token"`.
-    assert(tam >= 1);
-
-    vector<ldouble> ans;
-
-    // El primer token debe ser un operador (aridad > 0) para evitar el colapso
-    // de expresiones: si el primer token es una hoja (aridad 0), toda la
-    // expresión colapsa a un solo token y los demás se desperdician. En Python
-    // sería `ans.append(random_operator_token())`.
-    ans.push_back(random_operator_token());
-
-    // El resto de los tokens pueden ser cualquiera (hojas u operadores).
-    for (int i = 1; i < tam; i++){
-        ans.push_back(random_token());
-    }
-
-    // La fitness exige alguna hoja que dependa de x (la variable o x^2/x^3,
-    // issue #63): si el sorteo no saco el token x, se escribe en dos
-    // posiciones al azar de todo el vector (forzarlo sigue siendo una
-    // reparacion valida). Antes el indice se limitaba a [0, tam-4] (resto del
-    // tamano de poblacion de la version vieja) y las ultimas posiciones nunca
-    // se reparaban.
-    if (std::find(ans.begin(), ans.end(), TOKEN_X) == ans.end()){
-        for (int i = 0; i < 2; i++){
-            ans[rand() % tam] = TOKEN_X;
-        }
-    }
-    return ans;
-}
 
 // Tamano de los tres tramos del catalogo warm start: cinco bases por caso
 // (issue #143), cinco semillas precargadas del prototipo (issue #144) y
@@ -673,8 +635,7 @@ int createPopulation(vector<FunbObj>& Population, const ConfigBusqueda& config,
                 Population.push_back(FunbObj(std::move(semilla), 0, 1, caso));
                 semillas_inyectadas++;
             } else {
-                Population.push_back(
-                    FunbObj(vector_population(config.dimension), 0, 1, caso));
+                Population.push_back(FunbObj::create_random(config.dimension, caso));
             }
         }
     }
@@ -683,7 +644,7 @@ int createPopulation(vector<FunbObj>& Population, const ConfigBusqueda& config,
     // individuos nuevos como falten para llegar a config.poblacion, sin el
     // off-by-one de REVIEW C5.
     while (static_cast<int>(Population.size()) < config.poblacion){
-        Population.push_back(FunbObj(vector_population(config.dimension), 0, 1, caso));
+        Population.push_back(FunbObj::create_random(config.dimension, caso));
     }
 
     return semillas_inyectadas;
@@ -954,7 +915,7 @@ int reiniciar_poblacion(vector<FunbObj>& poblacion, int indice_record,
     int reemplazados = 0;
     for (int j = 0; j < tam_poblacion && reemplazados < cantidad_reemplazar; j++){
         if (j != indice_record){
-            poblacion[j] = FunbObj(vector_population(config.dimension), 0, 1, caso);
+            poblacion[j] = FunbObj::create_random(config.dimension, caso);
             reemplazados++;
         }
     }
@@ -1109,8 +1070,7 @@ int reiniciar_poblacion_adaptativo(vector<FunbObj>& poblacion,
                 poblacion[orden[rand() % conservados]].vecvalue();
             poblacion[orden[k]] = FunbObj(mutacion_puntual(elite), 0, 1, parametros.caso);
         } else {
-            poblacion[orden[k]] =
-                FunbObj(vector_population(parametros.dimension), 0, 1, parametros.caso);
+            poblacion[orden[k]] = FunbObj::create_random(parametros.dimension, parametros.caso);
         }
     }
 
