@@ -28,14 +28,15 @@ flowchart TB
     subgraph CORE["src/ - solver core (build/ode-solver)"]
         SEMILLA["semilla.{h,cpp}<br/>resolves the run seed"]
         TOKEN["token.h<br/>alphabet 1..29 · arity · rendering"]
-        DE["parse_tree.cpp - main() + DE/rand/1/bin loop<br/>population · mutation · crossover ·<br/>greedy selection · restart"]
+        DE["parse_tree.cpp - main() + DE/rand/1/bin loop<br/>population · mutation · crossover ·<br/>greedy selection"]
+        RESTART["restart_lifecycle.{h,cpp}<br/>stale / diversity trigger · escalation ·<br/>legacy and adaptive replacement"]
         DUAL["dualfunctions.{h,cpp}<br/>prefix-tree interpreter with 2dual numbers"]
         FIT["funbobj.{h,cpp}<br/>FunbObj fitness - paper eq. (4)<br/>λ₁h₁² + λ₂h₂² + Δx·Σ f²<br/>over the 100-point grid"]
         SALIDA["salida.{h,cpp}<br/>RAII stdout redirect"]
     end
 
     subgraph CHECK["Verification"]
-        TESTS["tests/ - 13 CTest executables"]
+        TESTS["tests/ - 16 CTest executables"]
         SCRIPTS["scripts/ - log / notebook checkers<br/>A/B experiment · Sage runner"]
     end
 
@@ -52,6 +53,8 @@ flowchart TB
     DUAL -- "y(x) · y'(x) · y''(x)" --> FIT
     DE -- "population" --> FIT
     FIT -- "fitness R (INFINITY for invalid trees)" --> DE
+    DE -- "generation evidence" --> RESTART
+    RESTART -- "restart outcome · replaced population" --> DE
     DE -- "best individual" --> OUT
     OUT --> SALIDA
     TESTS -. compile and link .-> CORE
@@ -292,14 +295,14 @@ very verbose — consider piping through `tail`:
 ctest --test-dir build
 ```
 
-This runs the 14 C++ tests registered in `CMakeLists.txt` (all targets are built by the preceding `cmake --build build`). For a focused test:
+This runs the 16 C++ tests registered in `CMakeLists.txt` (all targets are built by the preceding `cmake --build build`). For a focused test:
 
 ```bash
 cmake --build build --target test_mutation
 ./build/test_mutation
 ```
 
-`test_dual.cpp` asserts the dual-number evaluation pipeline (token arities, `parsv()` on known functions, NaN for incomplete expressions, `tan2dual()`/`sinh2dual()`/`cosh2dual()`/`tanh2dual()` derivatives, the `x²`/`x³` leaves, and the constant π/e leaves). `test_semilla.cpp` asserts the `ODE_SEED` resolution rule. `test_mutation.cpp` asserts the DE/rand/1/bin mutation operator (`v = x_r1 + F*(x_r2 - x_r3)` with `F` in `[0,1]`, token rounding/clamping to `1..29`, distinct random base individuals, vector-size safety). `test_crossover.cpp` asserts the binomial crossover (`gen_binomial()` decision per gene, trial size and leftover tokens, forced `j_rand` index, mutant-gene fraction ≈ `Cr`, `x`-token repair). `test_population.cpp` asserts the initial population (exact size, per-individual dimension, tokens inside the `1..29` alphabet, opt-in warm start, per-case base catalog validity and exact-solution fitness, fixed-seed determinism) and the search-configuration resolver (default dimension 20, `ODE_POP`/`ODE_DIM`/`ODE_GEN` overrides, invalid-value fallback, warm start at any dimension). `test_restart_escalation.cpp` asserts the adaptive restart ladder (0.4 → 0.6 → 0.8, refinement-only after `ODE_RESTART_CAP`, reset on a new best, configured cap and mutation share). `test_diversity_trigger.cpp` asserts the diversity detector (CV over finite fitnesses only, the ≥25%-finite guard, the finite-record guard, and the strict `ODE_DIV_THRESHOLD` boundary). `test_grid.cpp` asserts the evaluation grid (`x_rango()` returns exactly `npoints` equally spaced points with both endpoints included) and the paper's fitness functional (eq. (4): squared residuals, `λ₁ = λ₂ = 10`, the `Δx = 1/99` integration factor, the Case 1 (`ODE_CASE=1`) and hyperbolic Case 2 (`ODE_CASE=2`) residuals, and independently computed expected values for valid candidates). `test_token.cpp` asserts the public token-alphabet contract (codes `1..29`, arity per token, rendering, validity predicates, `random_token()` bounds). `test_funbobj_const.cpp` asserts that `FunbObj` accessors are const-correct. `test_header_hygiene.cpp` asserts that `dualfunctions.h` and `funbobj.h` are self-contained and use const references for read-only parameters. The tests link only what each one needs and do not run the evolutionary loop; `test_mutation.cpp`, `test_crossover.cpp`, `test_token.cpp`, `test_grid.cpp`, `test_population.cpp`, `test_restart_escalation.cpp`, `test_diversity_trigger.cpp` and `test_funbobj_const.cpp` need `parse_tree.cpp` and are built with `-DODE_NO_MAIN` so the test's own `main()` runs (`test_grid.cpp`, `test_population.cpp`, `test_restart_escalation.cpp`, `test_diversity_trigger.cpp` and `test_funbobj_const.cpp` include `parse_tree.cpp` directly for the DE loop and link `src/funbobj.cpp`, where `FunbObj` and `x_rango` now live).
+`test_dual.cpp` asserts the dual-number evaluation pipeline (token arities, `parsv()` on known functions, NaN for incomplete expressions, `tan2dual()`/`sinh2dual()`/`cosh2dual()`/`tanh2dual()` derivatives, the `x²`/`x³` leaves, and the constant π/e leaves). `test_semilla.cpp` asserts the `ODE_SEED` resolution rule. `test_mutation.cpp` asserts the DE/rand/1/bin mutation operator (`v = x_r1 + F*(x_r2 - x_r3)` with `F` in `[0,1]`, token rounding/clamping to `1..29`, distinct random base individuals, vector-size safety). `test_crossover.cpp` asserts the binomial crossover (`gen_binomial()` decision per gene, trial size and leftover tokens, forced `j_rand` index, mutant-gene fraction ≈ `Cr`, `x`-token repair). `test_population.cpp` asserts the initial population (exact size, per-individual dimension, tokens inside the `1..29` alphabet, opt-in warm start, per-case base catalog validity and exact-solution fitness, fixed-seed determinism) and the search-configuration resolver (default dimension 20, `ODE_POP`/`ODE_DIM`/`ODE_GEN` overrides, invalid-value fallback, warm start at any dimension). `test_restart_escalation.cpp` asserts the adaptive restart ladder (0.4 → 0.6 → 0.8, refinement-only after `ODE_RESTART_CAP`, reset on a new best, configured cap and mutation share). `test_diversity_trigger.cpp` asserts the diversity detector (CV over finite fitnesses only, the ≥25%-finite guard, the finite-record guard, and the strict `ODE_DIV_THRESHOLD` boundary). `test_grid.cpp` asserts the evaluation grid (`x_rango()` returns exactly `npoints` equally spaced points with both endpoints included) and the paper's fitness functional (eq. (4): squared residuals, `λ₁ = λ₂ = 10`, the `Δx = 1/99` integration factor, the Case 1 (`ODE_CASE=1`) and hyperbolic Case 2 (`ODE_CASE=2`) residuals, and independently computed expected values for valid candidates). `test_token.cpp` asserts the public token-alphabet contract (codes `1..29`, arity per token, rendering, validity predicates, `random_token()` bounds). `test_funbobj_const.cpp` asserts that `FunbObj` accessors are const-correct. `test_header_hygiene.cpp` asserts that `dualfunctions.h` and `funbobj.h` are self-contained and use const references for read-only parameters. The tests link only what each one needs and do not run the evolutionary loop; the DE-loop tests (`test_mutation.cpp`, `test_crossover.cpp`, `test_token.cpp`, `test_population.cpp`, `test_per_case_config.cpp`) compile `parse_tree.cpp` with `-DODE_NO_MAIN`, the restart-lifecycle tests (`test_restart_escalation.cpp`, `test_diversity_trigger.cpp`, `test_restart_lifecycle.cpp`) link `src/restart_lifecycle.cpp` without it, and the fitness tests include `funbobj.h`.
 
 The notebook/log checkers run standalone (they are not registered with ctest):
 
@@ -357,6 +360,7 @@ mode.
 | `build/ode-solver` | Compiled executable (output of `cmake --build build`) |
 | `src/parse_tree.cpp` | `main()` and the DE loop (single population, mutation, binomial crossover, greedy selection) |
 | `src/funbobj.h` / `src/funbobj.cpp` | Fitness module: `FunbObj` (paper eq. (4)) and the `x_rango()` evaluation grid |
+| `src/restart_lifecycle.h` / `src/restart_lifecycle.cpp` | Restart lifecycle: config/mode, Diversity trigger, escalation, legacy and adaptive replacement |
 | `src/dualfunctions.h` | Header for token interpreter and 2nd-order dual-number arithmetic |
 | `src/dualfunctions.cpp` | Implementation of 2dual operations (sin, cos, tan, sinh, cosh, tanh, exp, log, pow, etc.) and tree evaluation |
 | `src/token.h` | Header-only token alphabet: codes, arity, rendering, predicates and random draws |
@@ -368,6 +372,7 @@ mode.
 | `tests/test_semilla.cpp` | `ODE_SEED` resolution tests |
 | `tests/test_grid.cpp` | Evaluation-grid tests |
 | `tests/test_population.cpp` | Population and configuration tests |
+| `tests/test_restart_lifecycle.cpp` | Restart lifecycle interface and replacement tests |
 | `tests/test_restart_escalation.cpp` | Adaptive restart escalation tests |
 | `tests/test_diversity_trigger.cpp` | Diversity-trigger CV and guard tests |
 | `tests/test_token.cpp` | Token-alphabet contract tests |
@@ -380,6 +385,7 @@ mode.
 | `scripts/metricas.awk` | Shared log parser that fills `metricas.tsv` for both experiments |
 | `scripts/ab_common.sh` / `scripts/ab_common.py` | Runner helpers shared by the two experiments and their checkers |
 | `docs/ab-experiment.md` | A/B comparison report and conclusions |
+| `docs/restart-refactor-equivalence.md` | Pre/post-refactor restart equivalence evidence (issue #171) |
 | `scripts/check_dual_validation.py` | Executes the notebook's validation cells without SageMath |
 | `scripts/check_run_log.py` | Validates the structured log from a solver run |
 | `scripts/check_restart_escalation.py` | Validates the adaptive restart wiring in the DE loop |
