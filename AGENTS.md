@@ -143,21 +143,20 @@
   vocabulary, arity, rendering, and random-token source of truth.
   `docs/legacy/parse_tree_bckp.cpp` is a historical copy that also defines
   `main()`: never add it to a build.
-- `src/restart_lifecycle.{h,cpp}` (issues #166/#167/#168/#169) owns the restart
-  lifecycle: the restart-only configuration, the legacy/adaptive vocabulary,
-  the Diversity summary and its trigger, the stale window, the escalation
-  ladder, the decision itself, and both population replacements. They derive
-  the replacement dimension from the Population so the search configuration
-  never crosses the seam. The DE loop drives generations, discovers and
-  updates the all-time record, and applies the replacement; it does not decide
-  whether Diversity is evaluated or which escalation step applies. The decision
-  seam is
-  `ControlReinicio::decidir(nuevo_record, fitnesses)`: the loop passes the
-  generation evidence (whether a new best appeared and the population's
-  fitness values) and the module returns the decision; the replacement seam is
-  the free functions `reiniciar_poblacion(poblacion, indice, record, config,
-  caso)` and `reiniciar_poblacion_adaptativo(poblacion, record, parametros,
-  caso)`. The escalation ladder is
+- `src/restart_lifecycle.{h,cpp}` (issues #166/#167/#168/#169/#170) owns the
+  restart lifecycle: the restart-only configuration, the legacy/adaptive
+  vocabulary, the Diversity summary and its trigger, the stale window, the
+  escalation ladder, the decision, and both population replacements. They
+  derive the replacement dimension from the Population so the search
+  configuration never crosses the seam. The DE loop drives generations,
+  discovers and updates the all-time record, and logs the result; it does not
+  decide whether Diversity is evaluated, which escalation step applies, or how
+  the replacement is applied. The single per-generation seam is
+  `ControlReinicio::reiniciar(nuevo_record, fitnesses, poblacion,
+  indice_record, record)`: the loop passes the generation evidence and native
+  Population, and the module decides, replaces, and returns a
+  `ResultadoReinicio` with trigger, stale count, fraction, kept/replaced counts
+  and adaptive mutation share for the log. The escalation ladder is
   private to the module: do not expose it again as a collaborator.
 - `src/salida.{h,cpp}` owns the output destination: `resolver_salida()` maps
   `ODE_LOG`/`ODE_LOG_FILE` to a mode and path, and `RedireccionSalida` is the

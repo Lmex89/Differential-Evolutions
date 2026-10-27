@@ -74,11 +74,13 @@ bool dispara_reinicio_por_diversidad(const ResumenDiversidad& resumen,
 // ControlReinicio: implementacion de los metodos.
 // -------------------------------------------------------------------------
 
-ControlReinicio::ControlReinicio(const ConfigReinicio& config)
-    : config_(config) {}
+ControlReinicio::ControlReinicio(const ConfigReinicio& config, int caso)
+    : config_(config), caso_(caso) {}
 
-DecisionReinicio ControlReinicio::decidir(bool nuevo_record,
-                                         const std::vector<ldouble>& fitnesses) {
+ResultadoReinicio ControlReinicio::reiniciar(
+    bool nuevo_record, const std::vector<ldouble>& fitnesses,
+    std::vector<FunbObj>& poblacion, int indice_record,
+    const std::vector<ldouble>& record) {
     // `new_best` es el unico hecho que corta el estancamiento: resetea
     // tanto la ventana como el episodio de reinicios consecutivos. En
     // Python: `if nuevo_record: ...; self.reinicios_consecutivos = 0`.
@@ -92,42 +94,57 @@ DecisionReinicio ControlReinicio::decidir(bool nuevo_record,
 
     // Stale primero: si ambos canales disparan en la misma generacion,
     // gana el estancamiento y no se encadenan dos reinicios (issue #125).
+    DisparadorReinicio disparador = DisparadorReinicio::ninguno;
     if (generaciones_sin_mejora_ >= config_.stale_limit) {
-        return reiniciar(DisparadorReinicio::stale);
-    }
-
-    // La diversidad solo existe en adaptive (issue #129): en legacy el
-    // resumen ni se calcula, los guards ni se evaluan y la corrida
-    // historica sigue bit-reproducible. En Python:
-    // `if self.modo is ADAPTIVE and dispara_reinicio_por_diversidad(resumir_diversidad(fitnesses), ...): ...`.
-    if (config_.restart_mode == ModoReinicio::adaptive) {
+        disparador = DisparadorReinicio::stale;
+    } else if (config_.restart_mode == ModoReinicio::adaptive) {
+        // La diversidad solo existe en adaptive (issue #129): en legacy el
+        // resumen ni se calcula, los guards ni se evaluan y la corrida
+        // historica sigue bit-reproducible. En Python:
+        // `if self.modo is ADAPTIVE and dispara_reinicio_por_diversidad(resumir_diversidad(fitnesses), ...): ...`.
         const ResumenDiversidad resumen = resumir_diversidad(fitnesses);
         if (dispara_reinicio_por_diversidad(resumen, hay_record_,
                                             config_.div_threshold)) {
-            return reiniciar(DisparadorReinicio::diversity);
+            disparador = DisparadorReinicio::diversity;
         }
     }
 
     // Sin reinicio: ventana por debajo del limite y diversidad sin colapso.
-    return DecisionReinicio{};
+    if (disparador == DisparadorReinicio::ninguno) return ResultadoReinicio{};
+
+    // La operacion unica (issue #170) decide y aplica en la misma pasada: el
+    // bucle DE ya no coordina una decision con un reemplazo posterior. En
+    // Python: `resultado = self._preparar(trigger); resultado.reemplazados =
+    // self._aplicar(...); resultado.conservados = len(poblacion) - reemplazados`.
+    ResultadoReinicio resultado = preparar_reinicio(disparador);
+    resultado.reemplazados =
+        aplicar_reemplazo(resultado.parametros, poblacion, indice_record, record);
+    resultado.conservados =
+        static_cast<int>(poblacion.size()) - resultado.reemplazados;
+    resultado.reportar_cuota_mutacion =
+        config_.restart_mode == ModoReinicio::adaptive;
+    return resultado;
 }
 
-DecisionReinicio ControlReinicio::reiniciar(DisparadorReinicio disparador) {
-    // La evidencia se captura antes del reset: main() la usa para el
+ResultadoReinicio ControlReinicio::preparar_reinicio(
+    DisparadorReinicio disparador) {
+    // La evidencia se captura antes del reset: el resultado la lleva al
     // campo `stagnant_gens=` del log `restart |`.
     const int estancadas = generaciones_sin_mejora_;
     generaciones_sin_mejora_ = 0;
 
     // El ternario elige una sola rama: `consumir_siguiente` solo avanza la
     // escalera en adaptive, nunca en legacy. La cuota de legacy no la usa
-    // `reiniciar_poblacion`, pero se informa el valor configurado.
-    const ParametrosReinicio parametros =
+    // el reemplazo, pero se informa el valor configurado.
+    ResultadoReinicio resultado;
+    resultado.disparador = disparador;
+    resultado.parametros =
         config_.restart_mode == ModoReinicio::adaptive
             ? consumir_siguiente()
             : ParametrosReinicio{config_.restart_fraction,
                                  config_.restart_mutation_share};
-
-    return DecisionReinicio{disparador, parametros, estancadas};
+    resultado.generaciones_sin_mejora = estancadas;
+    return resultado;
 }
 
 ParametrosReinicio ControlReinicio::consumir_siguiente() {
@@ -157,12 +174,15 @@ ParametrosReinicio ControlReinicio::consumir_siguiente() {
 // -------------------------------------------------------------------------
 // Reemplazo legacy de la poblacion (issues #82/#168). Movido tal cual desde
 // parse_tree.cpp, salvo la dimension, que ahora se derive de la poblacion
-// para no cruzar la costura con la configuracion de busqueda.
+// para no cruzar la costura con la configuracion de busqueda. Es interno: la
+// unica costura publica es ControlReinicio::reiniciar() (issue #170).
 // -------------------------------------------------------------------------
 
 int parte_entera(long double fraccion, int total) {
     return static_cast<int>(fraccion * total);
 }
+
+namespace {
 
 // reiniciar_poblacion: mecanismo de escape de minimos locales. Reemplaza la
 // fraccion configurada de la poblacion con individuos aleatorios frescos para
@@ -214,8 +234,6 @@ int reiniciar_poblacion(std::vector<FunbObj>& poblacion, int indice_record,
     return reemplazados;
 }
 
-namespace {
-
 constexpr int CAMBIOS_PUNTUALES_MIN = 1;
 constexpr int CAMBIOS_PUNTUALES_MAX = 2;
 
@@ -242,8 +260,6 @@ std::vector<ldouble> mutacion_puntual(const std::vector<ldouble>& base) {
     }
     return copia;
 }
-
-}  // namespace
 
 int reiniciar_poblacion_adaptativo(std::vector<FunbObj>& poblacion,
                                    const std::vector<ldouble>& record,
@@ -298,4 +314,18 @@ int reiniciar_poblacion_adaptativo(std::vector<FunbObj>& poblacion,
         }
     }
     return cantidad;
+}
+
+}  // namespace
+
+int ControlReinicio::aplicar_reemplazo(
+    const ParametrosReinicio& parametros, std::vector<FunbObj>& poblacion,
+    int indice_record, const std::vector<ldouble>& record) {
+    // Legacy y adaptive conservan implementaciones separadas (issue #164):
+    // solo comparten el contexto de la pasada. En Python:
+    // `return reiniciar_poblacion_adaptativo(...) if adaptive else reiniciar_poblacion(...)`.
+    if (config_.restart_mode == ModoReinicio::adaptive) {
+        return reiniciar_poblacion_adaptativo(poblacion, record, parametros, caso_);
+    }
+    return reiniciar_poblacion(poblacion, indice_record, record, config_, caso_);
 }
