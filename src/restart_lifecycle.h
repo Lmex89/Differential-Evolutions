@@ -14,7 +14,7 @@
 #include <vector>
 #include <cmath>
 
-#include "funbobj.h"  // FunbObj: el reemplazo legacy trabaja sobre la poblacion nativa
+#include "funbobj.h"  // FunbObj: los reemplazos trabajan sobre la poblacion nativa
 
 // ldouble es el alias de long double usado en todo el proyecto. En Python
 // no existe este detalle (float es doble precision siempre).
@@ -190,5 +190,13 @@ int parte_entera(long double fraccion, int total);
 int reiniciar_poblacion(std::vector<FunbObj>& poblacion, int indice_record,
                         const std::vector<ldouble>& record,
                         const ConfigReinicio& config, int caso);
+
+// Reemplazo adaptativo: conserva los mas aptos, restaura el record ausente y
+// combina mutaciones de sobrevivientes con individuos frescos. La poblacion
+// tiene dimension uniforme; el retorno cuenta tambien el lugar del record.
+// En Python: `reemplazados = reiniciar_poblacion_adaptativo(poblacion, record, parametros, caso)`.
+int reiniciar_poblacion_adaptativo(std::vector<FunbObj>& poblacion,
+                                   const std::vector<ldouble>& record,
+                                   const ParametrosReinicio& parametros, int caso);
 
 #endif // RESTART_LIFECYCLE_H

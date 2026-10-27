@@ -8,6 +8,9 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstdlib>
+
+#include "token.h"
 
 // -------------------------------------------------------------------------
 // ResumenDiversidad y disparador.
@@ -209,4 +212,90 @@ int reiniciar_poblacion(std::vector<FunbObj>& poblacion, int indice_record,
         }
     }
     return reemplazados;
+}
+
+namespace {
+
+constexpr int CAMBIOS_PUNTUALES_MIN = 1;
+constexpr int CAMBIOS_PUNTUALES_MAX = 2;
+
+// Cambia 1-2 posiciones distintas; en Python seria random.sample(range(n), cambios).
+std::vector<ldouble> mutacion_puntual(const std::vector<ldouble>& base) {
+    const int n = static_cast<int>(base.size());
+    if (n == 0) return base;
+
+    int cambios = CAMBIOS_PUNTUALES_MIN +
+                  std::rand() % (CAMBIOS_PUNTUALES_MAX - CAMBIOS_PUNTUALES_MIN + 1);
+    if (cambios > n) cambios = n;
+
+    std::vector<ldouble> copia(base);
+    const int primera = std::rand() % n;
+    int nuevo = 0;
+    do { nuevo = random_token(); } while (nuevo == static_cast<int>(copia[primera]));
+    copia[primera] = nuevo;
+
+    if (cambios == CAMBIOS_PUNTUALES_MAX) {
+        int segunda = std::rand() % (n - 1);
+        if (segunda >= primera) segunda++;
+        do { nuevo = random_token(); } while (nuevo == static_cast<int>(copia[segunda]));
+        copia[segunda] = nuevo;
+    }
+    return copia;
+}
+
+}  // namespace
+
+int reiniciar_poblacion_adaptativo(std::vector<FunbObj>& poblacion,
+                                   const std::vector<ldouble>& record,
+                                   const ParametrosReinicio& parametros, int caso) {
+    const int tam = static_cast<int>(poblacion.size());
+    if (tam == 0) return 0;
+
+    const int dimension = static_cast<int>(poblacion[0].vecvalue().size());
+    for (const FunbObj& individuo : poblacion) {
+        assert(static_cast<int>(individuo.vecvalue().size()) == dimension);
+    }
+
+    // stable_sort conserva los empates y el resultado con semilla fija;
+    // en Python seria `sorted(range(tam), key=lambda i: poblacion[i].fitness())`.
+    std::vector<int> orden(tam);
+    for (int i = 0; i < tam; i++) orden[i] = i;
+    std::stable_sort(orden.begin(), orden.end(), [&poblacion](int a, int b) {
+        return poblacion[a].fitness() < poblacion[b].fitness();
+    });
+
+    int cantidad = parte_entera(parametros.fraccion, tam);
+    if (cantidad > tam - 1) cantidad = tam - 1;
+    if (cantidad < 0) cantidad = 0;
+    int conservados = tam - cantidad;
+
+    bool record_presente = false;
+    if (!record.empty()) {
+        for (int k = 0; k < conservados && !record_presente; k++) {
+            if (poblacion[orden[k]].vecvalue() == record) record_presente = true;
+        }
+    }
+    const bool inyectar = !record.empty() && !record_presente;
+    // Un record sin cupo desplaza al peor y cuenta como reemplazo.
+    if (inyectar && cantidad == 0) {
+        cantidad = 1;
+        conservados = tam - cantidad;
+    }
+
+    const int plazas_record = inyectar ? 1 : 0;
+    const int mutaciones = parte_entera(parametros.cuota_mutacion,
+                                        cantidad - plazas_record);
+    for (int k = conservados; k < tam; k++) {
+        const int lugar = k - conservados;
+        if (lugar < plazas_record) {
+            poblacion[orden[k]] = FunbObj(record, 0, 1, caso);
+        } else if (lugar - plazas_record < mutaciones) {
+            const std::vector<ldouble> elite =
+                poblacion[orden[std::rand() % conservados]].vecvalue();
+            poblacion[orden[k]] = FunbObj(mutacion_puntual(elite), 0, 1, caso);
+        } else {
+            poblacion[orden[k]] = FunbObj::create_random(dimension, caso);
+        }
+    }
+    return cantidad;
 }
