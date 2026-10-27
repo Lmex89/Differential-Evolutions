@@ -52,28 +52,6 @@ struct ParametrosReinicio {
 };
 
 // -------------------------------------------------------------------------
-// EscaladorReinicio: escalado de reinicios (issue #128).
-// Cada reinicio consecutivo sin mejora reemplaza una fraccion mayor,
-// hasta el tope; despues, refinamiento-only.
-// En Python seria una clase con un atributo `reinicios_consecutivos` y
-// dos metodos: `consumir_siguiente(config)` y `nuevo_record()`.
-class EscaladorReinicio {
-public:
-    // consumir_siguiente: devuelve los parametros del proximo reinicio segun
-    // cuantos reinicios consecutivos sin mejora lleva el episodio, y avanza
-    // la escalera. En Python:
-    // `min(config.restart_fraction, config.restart_min_fraction + 0.2 * self.n)`.
-    ParametrosReinicio consumir_siguiente(const ConfigReinicio& config);
-
-    // nuevo_record: cualquier `new_best` corta el episodio y devuelve la
-    // escalera al primer reinicio suave. En Python: `self.n = 0`.
-    void nuevo_record();
-
-private:
-    int reinicios_consecutivos_ = 0;
-};
-
-// -------------------------------------------------------------------------
 // ResumenDiversidad: resumen de la generacion para el disparador (issue #129).
 // `individuos_finitos` cuenta solo los valores evaluables; `individuos_totales`
 // es el tamano de la muestra; el CV usa solo los finitos.
@@ -146,32 +124,44 @@ struct DecisionReinicio {
 // -------------------------------------------------------------------------
 // ControlReinicio: estado del ciclo de vida de una corrida (issue #138).
 // La configuracion se guarda por valor y es inmutable; la ventana de
-// estancamiento y el escalador son estado mutable. `decidir()` recibe los
-// hechos de la generacion (nuevo record, resumen de diversidad) y devuelve
-// la decision; el consumidor (main) la ejecuta sin conocer los detalles.
-// En Python seria una clase con `decidir(nuevo_record, diversidad)` y
+// estancamiento y la escalera de escalado son estado mutable. `decidir()`
+// recibe la evidencia de la generacion (nuevo record y fitness de la
+// poblacion) y devuelve la decision; el consumidor (main) la ejecuta sin
+// conocer los detalles. Desde el issue #167 el modulo calcula tambien el
+// resumen de diversidad: el bucle DE solo aporta los datos, no decide si la
+// diversidad se evalua.
+// En Python seria una clase con `decidir(nuevo_record, fitnesses)` y
 // estado interno.
 class ControlReinicio {
 public:
     explicit ControlReinicio(const ConfigReinicio& config);
 
-    // decidir: evalua los hechos de la generacion y devuelve la decision.
-    // Stale tiene prioridad sobre diversity si ambos disparan en la misma
-    // generacion; el reinicio resetea la ventana pero no el escalador
-    // (el escalador solo lo resetea `nuevo_record`). En Python:
+    // decidir: evalua la evidencia de la generacion y devuelve la decision.
+    // `fitnesses` son los valores de la poblacion de esta generacion (el
+    // modulo calcula el CV a partir de los finitos). Stale tiene prioridad
+    // sobre diversity si ambos disparan en la misma generacion; el reinicio
+    // resetea la ventana pero no la escalera (la escalera solo la resetea
+    // `nuevo_record`). En Python:
     // `if nuevo_record: ...; if generaciones >= stale_limit: return _reiniciar(STALE)`.
     DecisionReinicio decidir(bool nuevo_record,
-                             const ResumenDiversidad& diversidad);
+                             const std::vector<ldouble>& fitnesses);
 
 private:
     // reiniciar: arma la decision de un reinicio real y resetea la ventana,
-    // pero no el escalador (solo `nuevo_record` lo resetea). En adaptive
+    // pero no la escalera (solo `nuevo_record` la resetea). En adaptive
     // avanza la escalera; en legacy usa la fraccion configurada y no lo toca.
     DecisionReinicio reiniciar(DisparadorReinicio disparador);
 
+    // consumir_siguiente: parametros del proximo reinicio segun cuantos
+    // reinicios consecutivos sin mejora lleva el episodio (issue #128), y
+    // avanza la escalera. Es el unico lugar donde la escalera existe: vive
+    // dentro del modulo y no se expone como colaborador. En Python:
+    // `min(config.restart_fraction, config.restart_min_fraction + 0.2 * self.n)`.
+    ParametrosReinicio consumir_siguiente();
+
     const ConfigReinicio config_;
-    EscaladorReinicio escalador_;
     int generaciones_sin_mejora_ = 0;
+    int reinicios_consecutivos_ = 0;  // escalera de escalado (#128)
     bool hay_record_ = false;
 };
 

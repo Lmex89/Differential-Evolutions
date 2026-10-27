@@ -134,8 +134,8 @@
 ## Architecture and invariants
 
 - `src/parse_tree.cpp` owns `main()` (behind `ODE_NO_MAIN` for tests), the DE
-  loop, mutation, crossover, the restart lifecycle, the warm-start catalog and
-  configuration. `src/funbobj.{h,cpp}` (issue #157) owns `FunbObj` and
+  loop, mutation, crossover, the population replacement, the warm-start catalog
+  and configuration. `src/funbobj.{h,cpp}` (issue #157) owns `FunbObj` and
   `x_rango`: the fitness evaluation, its per-case residual and
   initial-condition switches (internal to the `.cpp`) and the 100-point grid.
   `src/dualfunctions.{h,cpp}` interprets prefix token vectors as `[y, y', y'']`;
@@ -143,6 +143,16 @@
   vocabulary, arity, rendering, and random-token source of truth.
   `docs/legacy/parse_tree_bckp.cpp` is a historical copy that also defines
   `main()`: never add it to a build.
+- `src/restart_lifecycle.{h,cpp}` (issues #166/#167) owns the restart
+  lifecycle: the restart-only configuration, the legacy/adaptive vocabulary,
+  the Diversity summary and its trigger, the stale window, the escalation
+  ladder and the decision itself. The DE loop drives generations, discovers and
+  updates the all-time record, and applies the decision; it does not decide
+  whether Diversity is evaluated or which escalation step applies. The seam is
+  `ControlReinicio::decidir(nuevo_record, fitnesses)`: the loop passes the
+  generation evidence (whether a new best appeared and the population's
+  fitness values) and the module returns the decision. The escalation ladder is
+  private to the module: do not expose it again as a collaborator.
 - `src/salida.{h,cpp}` owns the output destination: `resolver_salida()` maps
   `ODE_LOG`/`ODE_LOG_FILE` to a mode and path, and `RedireccionSalida` is the
   RAII redirect that swaps `std::cout` once at startup and restores it on
@@ -153,14 +163,17 @@
   (issue #158) and link only `src/funbobj.cpp` and its `src/dualfunctions.cpp`
   dependency; their CMake rules carry no `ODE_NO_MAIN` and no
   `src/semilla.cpp`.
-- The remaining DE-loop tests (`tests/test_population.cpp`,
-  `tests/test_per_case_config.cpp`, `tests/test_restart_escalation.cpp`,
-  `tests/test_diversity_trigger.cpp`, `tests/test_restart_lifecycle.cpp`)
-  include `parse_tree.cpp` directly and link `src/semilla.cpp`,
-  `src/dualfunctions.cpp` and `src/funbobj.cpp` (issue #157), where `FunbObj`
-  and `x_rango` live. Their CMake rules intentionally compile with
-  `-DODE_NO_MAIN` and keep `parse_tree.cpp` off the compile line; do not
-  "simplify" this into compiling that source twice.
+- The DE-loop tests (`tests/test_population.cpp`,
+  `tests/test_per_case_config.cpp`) include `parse_tree.cpp` directly and link
+  `src/semilla.cpp`, `src/dualfunctions.cpp`, `src/funbobj.cpp` (issue #157)
+  and `src/restart_lifecycle.cpp` (issue #166), where `FunbObj` and `x_rango`
+  live. Their CMake rules intentionally compile with `-DODE_NO_MAIN` and keep
+  `parse_tree.cpp` off the compile line; do not "simplify" this into compiling
+  that source twice.
+- The three restart-lifecycle tests (`tests/test_restart_lifecycle.cpp`,
+  `tests/test_restart_escalation.cpp`, `tests/test_diversity_trigger.cpp`)
+  cross the module interface: they include `restart_lifecycle.h` and link
+  `src/restart_lifecycle.cpp` without `parse_tree.cpp` (issue #167).
 - `tests/test_header_hygiene.cpp` includes `funbobj.h` to keep the module
   interface self-contained.
 - Interpreter operand blanking to `NAN` is deliberate. Invalid/incomplete or
