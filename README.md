@@ -72,8 +72,8 @@ flowchart LR
 
     subgraph TRACK["Tracked on master"]
         direction TB
-        SRC["src/ - solver sources (8 files)"]
-        TST["tests/ - 13 test files"]
+        SRC["src/ - solver sources (12 files)"]
+        TST["tests/ - 16 test files"]
         SCR["scripts/ - checkers, experiment, Sage runner"]
         DOC["docs/ - standards, evidence,<br/>legacy/ (never built)"]
         AGT["AGENTS.md · .agents/skills/ - agent guide"]

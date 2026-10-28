@@ -10,9 +10,8 @@
   back to `Read`/`Grep` only for files codegraph does not index (this file,
   `README.md`, `GLOSSARY.md`, notebooks, `docs/`) or files codegraph flags as
   stale.
-- Read `GLOSSARY.md` before work that uses domain terminology. Its token
-  tables are stale (former 21-token alphabet); `token.h` is the source of
-  truth and defines the contiguous alphabet `1..29`.
+- Read `GLOSSARY.md` before work that uses domain terminology. `src/token.h`
+  is the source of truth for the token alphabet.
 
 ## Build, test, and run
 
