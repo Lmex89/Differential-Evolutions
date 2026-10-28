@@ -43,7 +43,7 @@ Domain-specific terms used in this codebase.
 | **Prefix notation** | Operators precede their operands (e.g. `+ 1 2` instead of `1 + 2`); used for the token encoding |
 | **Token** | An integer code representing a constant, variable, or operation (see token table in README) |
 | **Arity** | The number of operands an operator takes (0 for constants/variables, 1 for unary ops, 2 for binary ops) |
-| **Alphabet** | The complete set of available tokens (21 tokens in this implementation) |
+| **Alphabet** | The complete set of available tokens (29 tokens in this implementation) |
 
 ## Dual-number arithmetic
 
@@ -63,4 +63,4 @@ Domain-specific terms used in this codebase.
 | **`x_rango()`** | Generates the evaluation grid (array of `[x, 1.0, 0.0]` triples) over which fitness is measured; exactly `npoints` points with both endpoints included (100 for `[0,1]`, paper §5) |
 | **`OperF` / `OperF2`** | Functions that dispatch unary (1-arg) and binary (2-arg) operations on dual-number vectors |
 | **`narg()`** | Returns the arity (number of arguments) for a given token code |
-| **`FunbObj::create_random()`** | Builds one complete random individual for a run's ODE case: an operator-first token vector of the configured dimension, repaired to contain an x-dependent token |
+| **`FunbObj::create_random()`** | Builds one complete random individual for a run's ODE case. It starts the configured-size token vector with an operator, then inserts `x` if needed; the repair can overwrite that first token |

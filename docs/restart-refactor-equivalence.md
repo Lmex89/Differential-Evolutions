@@ -9,9 +9,10 @@ restart lifecycle moved). The verified state is `f153a4a` (merge of #178, the
 last restart-refactor commit). Both revisions were built with the same
 out-of-source CMake configuration (`C++17`, `-Wall`, `-O3`).
 
-The #165 reference run was verified during that issue but was not committed as
-an artifact. This report reconstructs it from `b9f036c` with the commands below,
-so the comparison is reproducible from the repository history.
+Issue #165 and PR #172 state that a reference run was captured, but do not
+provide its log, hash, or complete settings. The comparison below reconstructs
+a pre-refactor run from `b9f036c`; it cannot establish whether that run matches
+the original #165 reference.
 
 ## Acceptance-criteria matrix
 
@@ -20,40 +21,39 @@ so the comparison is reproducible from the repository history.
 | The full C++ test suite passes | `ctest --test-dir build` | PASS: 16/16 tests |
 | Restart-escalation checker passes unchanged | `python3 scripts/check_restart_escalation.py` | PASS: 35 restarts with the configured escalation and `new_best` reset |
 | Diversity-trigger checker passes unchanged | `python3 scripts/check_diversity_trigger.py` | PASS: diversity/stale channels, shared ladder and warm-start boundary |
-| Legacy fixed-seed run matches the pre-refactor evidence | normalized log comparison | PASS: identical SHA-256, no diff |
+| Legacy fixed-seed run matches the original #165 reference | original log and settings unavailable; reconstructed revision comparison below | UNVERIFIED against the original |
 | Adaptive fixed-seed run keeps its restart sequence | normalized log comparison | PASS: identical SHA-256, no diff |
 | Documentation matches the module layout | `AGENTS.md`, `GLOSSARY.md`, `README.md` | PASS: module map, test wiring and random-Individual factory updated |
 
 ## Fixed-seed runs
 
-Both revisions were run with `ODE_LOG=terminal` and no `ODE_LOG_FILE`:
+From the repository root, the following creates two sibling worktrees, builds
+both revisions, and runs each mode with an isolated environment. The worktree
+paths must not already exist. CPU-time fields are removed before comparison.
 
 ```bash
-# Reference build
-git worktree add ../ode-prerefactor b9f036c
-cmake -S ../ode-prerefactor -B ../ode-prerefactor/build
-cmake --build ../ode-prerefactor/build
+(
+set -e
+git worktree add --detach ../ode-prerefactor b9f036c
+git worktree add --detach ../ode-postrefactor f153a4a
 
-# Verified build
-cmake -B build
-cmake --build build
+for REVISION in ../ode-prerefactor ../ode-postrefactor; do
+    cmake -S "$REVISION" -B "$REVISION/build"
+    cmake --build "$REVISION/build"
+    for MODE in legacy adaptive; do
+        env -i PATH="$PATH" ODE_LOG=terminal ODE_SEED=42 ODE_CASE=1 \
+            ODE_POP=100 ODE_DIM=20 ODE_GEN=200 ODE_STALE_LIMIT=20 \
+            ODE_RESTART_MODE="$MODE" "$REVISION/build/ode-solver" \
+            > "$REVISION/$MODE.log"
+        sed -E 's/^\[[^]]*\] //; s/elapsed_cpu_s=[^ ]+//g' \
+            "$REVISION/$MODE.log" > "$REVISION/$MODE.semantic.log"
+    done
+done
 
-# Legacy run
-env ODE_LOG=terminal ODE_SEED=42 ODE_CASE=1 ODE_POP=100 ODE_DIM=20 \
-    ODE_GEN=200 ODE_STALE_LIMIT=20 ./build/ode-solver > legacy.log
-
-# Adaptive run (same evidence plus the mode switch)
-env ODE_LOG=terminal ODE_SEED=42 ODE_CASE=1 ODE_POP=100 ODE_DIM=20 \
-    ODE_GEN=200 ODE_STALE_LIMIT=20 ODE_RESTART_MODE=adaptive \
-    ./build/ode-solver > adaptive.log
-```
-
-CPU-time fields are the only expected difference. They were removed before
-comparing the logs:
-
-```bash
-sed -E 's/^\[[^]]*\] //; s/elapsed_cpu_s=[^ ]+//g' legacy.log > legacy.semantic.log
-sed -E 's/^\[[^]]*\] //; s/elapsed_cpu_s=[^ ]+//g' adaptive.log > adaptive.semantic.log
+sha256sum ../ode-prerefactor/*.semantic.log ../ode-postrefactor/*.semantic.log
+diff -u ../ode-prerefactor/legacy.semantic.log ../ode-postrefactor/legacy.semantic.log
+diff -u ../ode-prerefactor/adaptive.semantic.log ../ode-postrefactor/adaptive.semantic.log
+)
 ```
 
 | Run | Reference SHA-256 | Refactored SHA-256 | Diff |
