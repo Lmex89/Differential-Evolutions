@@ -18,6 +18,7 @@
 #include <string>
 #include <cstdlib>
 #include <array>
+#include <cstdint>
 
 #include "dualfunctions.h"  // ahora autocontenido: incluye <vector>/<string> por si mismo
 #include "token.h"          // expone el contrato publico del rango del alfabeto
@@ -250,39 +251,49 @@ static void validar_catalogo(const vector<EntradaCatalogo>& catalogo, int caso) 
 // la dimension, renderiza sin huecos, depende de x y tiene fitness finita.
 // -------------------------------------------------------------------------
 
-static void test_semilla_valida() {
+static void test_construir_semilla_validada() {
     const int caso = 0;
     const int dimension = 20;
 
     // La base exacta del caso 0 (cos(x) + sin(x)) es el caso positivo.
     const vector<ldouble> valida = {
         TOKEN_ADD, TOKEN_COS, TOKEN_X, TOKEN_SIN, TOKEN_X};
-    check_bool("semilla_valida acepta una base exacta",
-               semilla_valida(valida, dimension, caso));
+    check_bool("construir_semilla_validada acepta una base exacta",
+               construir_semilla_validada(valida, dimension, caso).has_value());
 
     // Expresion completa pero constante: no depende de x, asi que fitness()
     // la penaliza con INFINITY.
     const vector<ldouble> constante = {
         TOKEN_ADD, TOKEN_CONST1, TOKEN_CONST2};
-    check_bool("semilla_valida rechaza una expresion constante",
-               !semilla_valida(constante, dimension, caso));
+    check_bool("construir_semilla_validada rechaza una expresion constante",
+               !construir_semilla_validada(constante, dimension, caso));
 
     // Expresion incompleta: ADD solo tiene un operando y deja un hueco "()".
-    const vector<ldouble> incompleta = {TOKEN_ADD, TOKEN_CONST1};
-    check_bool("semilla_valida rechaza una expresion con huecos",
-               !semilla_valida(incompleta, dimension, caso));
+    const vector<ldouble> incompleta = {TOKEN_ADD, TOKEN_X};
+    check_bool("construir_semilla_validada rechaza una expresion con huecos",
+               !construir_semilla_validada(incompleta, static_cast<int>(incompleta.size()), caso));
+
+    // Con dimension mayor el relleno CONST1 completa el hueco: {ADD, X} se
+    // convierte en ADD(X, 1) y es valida. Ejercita el camino real de relleno.
+    check_bool("construir_semilla_validada acepta un hueco que el relleno completa",
+               construir_semilla_validada(incompleta, dimension, caso).has_value());
+
+    // Una entrada corta que tras el relleno es ADD(1, 1): completa pero sin x.
+    const vector<ldouble> corta_constante = {TOKEN_ADD};
+    check_bool("construir_semilla_validada rechaza una entrada corta sin x",
+               !construir_semilla_validada(corta_constante, dimension, caso));
 
     // 1/x en x=0 produce un valor no finito; el resto de la expresion esta
     // bien formada y depende de x, asi que solo falla la fitness.
     const vector<ldouble> no_finita = {
         TOKEN_DIV, TOKEN_CONST1, TOKEN_X};
-    check_bool("semilla_valida rechaza una fitness no finita",
-               !semilla_valida(no_finita, dimension, caso));
+    check_bool("construir_semilla_validada rechaza una fitness no finita",
+               !construir_semilla_validada(no_finita, dimension, caso));
 
     // La entrada mide tres tokens: no cabe en una dimension de dos.
     const vector<ldouble> larga = {TOKEN_ADD, TOKEN_X, TOKEN_X};
-    check_bool("semilla_valida rechaza una entrada mas larga que la dimension",
-               !semilla_valida(larga, 2, caso));
+    check_bool("construir_semilla_validada rechaza una entrada mas larga que la dimension",
+               !construir_semilla_validada(larga, 2, caso));
 }
 
 static void test_catalogo_semillas_por_caso() {
@@ -522,7 +533,7 @@ static void test_warm_start_inyecta_el_catalogo_del_caso() {
             // Las semillas realmente inyectadas (todas menos las dos
             // precargadas rechazadas) deben pasar la garantia de runtime:
             // sin huecos, x-dependientes y con fitness finita. Es una
-            // comprobacion de sanidad independiente de semilla_valida: usa
+            // comprobacion de sanidad independiente de construir_semilla_validada: usa
             // solo la interfaz publica de FunbObj. En Python seria
             // `assert all("()" not in repr(p) and has_x(p) and
             //             math.isfinite(p.fitness()) for p in poblacion[:25]
@@ -607,7 +618,10 @@ static void test_warm_start_rellena_huecos_con_aleatorios() {
     const vector<vector<ldouble>> entradas = {
         {TOKEN_ADD, TOKEN_COS, TOKEN_X, TOKEN_SIN, TOKEN_X},  // 0 valida
         {TOKEN_ADD, TOKEN_CONST1, TOKEN_CONST2},              // 1 constante
-        {TOKEN_ADD, TOKEN_CONST1},                            // 2 hueco
+        {TOKEN_ADD, TOKEN_ADD, TOKEN_ADD, TOKEN_ADD, TOKEN_ADD,
+         TOKEN_ADD, TOKEN_ADD, TOKEN_ADD, TOKEN_ADD, TOKEN_ADD,
+         TOKEN_ADD, TOKEN_ADD, TOKEN_ADD, TOKEN_ADD, TOKEN_ADD,
+         TOKEN_ADD, TOKEN_ADD, TOKEN_ADD, TOKEN_X, TOKEN_X},  // 2 hueco con x
         {TOKEN_X},                                            // 3 valida
         {TOKEN_COS, TOKEN_X},                                 // 4 valida
         {TOKEN_SIN, TOKEN_X}                                  // 5 fuera de cuota
@@ -621,9 +635,15 @@ static void test_warm_start_rellena_huecos_con_aleatorios() {
     config.dimension = 20;
     config.warm_start = true;
 
+    FunbObj incompleta(entradas[2], 0, 1, 0);
+    check_bool("la entrada con x conserva huecos tras el relleno",
+               entradas[2].size() == static_cast<size_t>(config.dimension) &&
+               incompleta.represant().find("()") != string::npos);
+
     srand(20261027);
     vector<FunbObj> poblacion;
     const int sembradas = createPopulation(poblacion, config, 0, catalogo);
+    const int siguiente_caliente = rand();
 
     check_int("el catalogo sintetico inyecta solo las 3 semillas validas",
               sembradas, 3);
@@ -637,12 +657,11 @@ static void test_warm_start_rellena_huecos_con_aleatorios() {
         return esperada;
     };
 
-    check_bool("la entrada valida 0 conserva su lugar",
-               poblacion[0].vecvalue() == rellenada(entradas[0]));
-    check_bool("la entrada valida 3 conserva su lugar",
-               poblacion[3].vecvalue() == rellenada(entradas[3]));
-    check_bool("la entrada valida 4 conserva su lugar",
-               poblacion[4].vecvalue() == rellenada(entradas[4]));
+    const array<size_t, 3> indices_validos = {0, 3, 4};
+    for (const size_t i : indices_validos) {
+        check_bool("la entrada valida conserva su lugar " + std::to_string(i),
+                   poblacion[i].vecvalue() == rellenada(entradas[i]));
+    }
 
     // Los huecos 1 y 2 reciben un individuo uniforme: no son la entrada
     // rechazada y dependen de x porque vector_population siempre fuerza una
@@ -667,6 +686,67 @@ static void test_warm_start_rellena_huecos_con_aleatorios() {
     // entraria y `sembradas` seria 4.
     check_bool("la sexta entrada queda fuera de la cuota",
                poblacion[5].vecvalue() != rellenada(entradas[5]));
+
+    srand(20261027);
+    ConfigBusqueda frio = config;
+    // Aleatorios que consume la poblacion caliente: todo menos las semillas.
+    frio.poblacion = static_cast<int>(poblacion.size()) - sembradas;
+    frio.warm_start = false;
+    vector<FunbObj> aleatorios;
+    createPopulation(aleatorios, frio, 0, catalogo);
+    const int siguiente_frio = rand();
+    size_t indice_aleatorio = 0;
+    bool secuencia_igual = true;
+    for (size_t i = 0; i < poblacion.size(); i++) {
+        if (i == 0 || i == 3 || i == 4) continue;
+        if (indice_aleatorio >= aleatorios.size() ||
+            poblacion[i].vecvalue() != aleatorios[indice_aleatorio++].vecvalue()) {
+            secuencia_igual = false;
+        }
+    }
+    check_bool("rechazos y cola conservan toda la secuencia aleatoria",
+               secuencia_igual && indice_aleatorio == aleatorios.size());
+    check_int("warm start conserva el siguiente sorteo", siguiente_caliente, siguiente_frio);
+
+    // FNV-1a por entero, modulo 2^64; en Python: h = ((h ^ n) * 1099511628211) & ((1 << 64) - 1).
+    auto mezclar = [](std::uint64_t h, std::uint64_t n) {
+        return (h ^ n) * UINT64_C(1099511628211);
+    };
+    constexpr std::uint64_t inicial = UINT64_C(14695981039346656037);
+    srand(20261027);
+    std::uint64_t firma_rand = inicial;
+    for (int i = 0; i < 4096; i++) firma_rand = mezclar(firma_rand, rand());
+    // Oraculo dependiente de plataforma: solo glibc reproduce este flujo de
+    // rand(). En otra libc se avisa en vez de omitirlo en silencio.
+    if (firma_rand != UINT64_C(0xc990d7988f1c29e5)) {
+        std::cerr << "AVISO: rand() no es el de glibc; se omite la comparacion historica\n";
+    } else {
+        // Referencia d265c3c con glibc: 100 individuos de 20 tokens y el sorteo siguiente.
+        std::uint64_t firma_poblacion = inicial;
+        bool dimensiones_validas = poblacion.size() == 100;
+        for (const auto& individuo : poblacion) {
+            const auto tokens = individuo.vecvalue();
+            dimensiones_validas = dimensiones_validas && tokens.size() == 20;
+            for (const auto token : tokens) firma_poblacion = mezclar(firma_poblacion, static_cast<std::uint64_t>(token));
+        }
+        check_bool("poblacion completa coincide con la revision historica",
+                   dimensiones_validas && firma_poblacion == UINT64_C(0x97373430fb29549f));
+        check_int("semillas inyectadas coinciden con la revision historica", sembradas, 3);
+        check_int("siguiente sorteo coincide con la revision historica", siguiente_caliente, 924363465);
+    }
+    check_bool("la semilla aceptada tiene fitness finita en el caso activo",
+               std::isfinite(poblacion[0].fitness()) && poblacion[0].fitness() < 1e-6L);
+    FunbObj directo_caso0(rellenada(entradas[0]), 0, 1, 0);
+    check_bool("la fitness de la semilla coincide con evaluarla directamente en el caso 0",
+               poblacion[0].fitness() == directo_caso0.fitness());
+
+    srand(20261027);
+    vector<FunbObj> otro_caso;
+    createPopulation(otro_caso, config, 2, catalogo);
+    FunbObj directo_caso2(rellenada(entradas[0]), 0, 1, 2);
+    check_bool("la fitness de la semilla corresponde al ODE case activo",
+               otro_caso[0].fitness() == directo_caso2.fitness() &&
+               otro_caso[0].fitness() != poblacion[0].fitness());
 }
 
 static void test_warm_start_omite_entradas_mas_largas_que_la_dimension() {
@@ -985,7 +1065,7 @@ int main() {
     test_createPopulation_cantidad_exacta();
     test_createPopulation_respeta_la_dimension();
     test_warm_start_opt_in();
-    test_semilla_valida();
+    test_construir_semilla_validada();
     test_catalogo_semillas_por_caso();
     test_genericos_compartidos_entre_casos();
     test_warm_start_inyecta_el_catalogo_del_caso();
