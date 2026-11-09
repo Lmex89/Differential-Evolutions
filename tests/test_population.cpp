@@ -258,7 +258,7 @@ static void test_semilla_valida() {
     const vector<ldouble> valida = {
         TOKEN_ADD, TOKEN_COS, TOKEN_X, TOKEN_SIN, TOKEN_X};
     check_bool("semilla_valida acepta una base exacta",
-               semilla_valida(valida, dimension, caso));
+               semilla_valida(valida, dimension, caso).has_value());
 
     // Expresion completa pero constante: no depende de x, asi que fitness()
     // la penaliza con INFINITY.
@@ -624,6 +624,7 @@ static void test_warm_start_rellena_huecos_con_aleatorios() {
     srand(20261027);
     vector<FunbObj> poblacion;
     const int sembradas = createPopulation(poblacion, config, 0, catalogo);
+    const int siguiente_caliente = rand();
 
     check_int("el catalogo sintetico inyecta solo las 3 semillas validas",
               sembradas, 3);
@@ -667,6 +668,33 @@ static void test_warm_start_rellena_huecos_con_aleatorios() {
     // entraria y `sembradas` seria 4.
     check_bool("la sexta entrada queda fuera de la cuota",
                poblacion[5].vecvalue() != rellenada(entradas[5]));
+
+    srand(20261027);
+    ConfigBusqueda frio = config;
+    frio.poblacion = 97;
+    frio.warm_start = false;
+    vector<FunbObj> aleatorios;
+    createPopulation(aleatorios, frio, 0, catalogo);
+    const int siguiente_frio = rand();
+
+    size_t indice_aleatorio = 0;
+    bool secuencia_igual = true;
+    for (size_t i = 0; i < poblacion.size(); i++) {
+        if (i == 0 || i == 3 || i == 4) continue;
+        if (poblacion[i].vecvalue() != aleatorios[indice_aleatorio++].vecvalue()) {
+            secuencia_igual = false;
+        }
+    }
+    check_bool("rechazos y cola conservan toda la secuencia aleatoria", secuencia_igual);
+    check_int("warm start conserva el siguiente sorteo", siguiente_caliente, siguiente_frio);
+    check_bool("la semilla aceptada tiene fitness finita en el caso activo",
+               std::isfinite(poblacion[0].fitness()) && poblacion[0].fitness() < 1e-6L);
+
+    srand(20261027);
+    vector<FunbObj> otro_caso;
+    createPopulation(otro_caso, config, 2, catalogo);
+    check_bool("la fitness de la semilla corresponde al ODE case activo",
+               std::isfinite(otro_caso[0].fitness()) && otro_caso[0].fitness() > 1e-6L);
 }
 
 static void test_warm_start_omite_entradas_mas_largas_que_la_dimension() {

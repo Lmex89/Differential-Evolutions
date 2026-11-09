@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <algorithm>
 #include <functional>
+#include <optional>
 #include <utility>
 #include <sstream>
 #include <iomanip>
@@ -454,20 +455,9 @@ int cuota_semillas(int poblacion, int tamano_catalogo){
     return std::min(sin_tope, tamano_catalogo);
 }
 
-// semilla_valida (issue #147): predicado que decide si una entrada del
-// catalogo puede inyectarse como individuo. Debe caber en la dimension (si no,
-// no se puede rellenar sin truncar el arbol), renderizar sin huecos, contener
-// al menos una hoja x-dependiente y tener fitness finita para el caso activo.
-// En Python seria:
-//     def semilla_valida(entrada, dimension, caso):
-//         if len(entrada) > dimension: return False
-//         semilla = entrada + [TOKEN_CONST1] * (dimension - len(entrada))
-//         individuo = FunbObj(semilla, 0, 1, caso)
-//         return ("()" not in individuo.represant()
-//                 and any(is_x_dependent(t) for t in semilla)
-//                 and math.isfinite(individuo.fitness()))
-bool semilla_valida(const vector<ldouble>& entrada, int dimension, int caso){
-    if (static_cast<int>(entrada.size()) > dimension) return false;
+// Devuelve el individuo validado o nullopt (en Python, el individuo o None).
+optional<FunbObj> semilla_valida(const vector<ldouble>& entrada, int dimension, int caso){
+    if (static_cast<int>(entrada.size()) > dimension) return nullopt;
 
     vector<ldouble> semilla = entrada;
     semilla.resize(dimension, TOKEN_CONST1);
@@ -475,11 +465,12 @@ bool semilla_valida(const vector<ldouble>& entrada, int dimension, int caso){
     const bool depende_de_x = std::any_of(
         semilla.begin(), semilla.end(),
         [](ldouble token){ return is_x_dependent(static_cast<int>(token)); });
-    if (!depende_de_x) return false;
+    if (!depende_de_x) return nullopt;
 
     FunbObj individuo(std::move(semilla), 0, 1, caso);
-    return individuo.represant().find("()") == string::npos &&
-           std::isfinite(individuo.fitness());
+    if (individuo.represant().find("()") != string::npos ||
+        !std::isfinite(individuo.fitness())) return nullopt;
+    return individuo;
 }
 
 // createPopulation: llena `Population` (que entra vacia) con exactamente
@@ -531,13 +522,9 @@ int createPopulation(vector<FunbObj>& Population, const ConfigBusqueda& config,
              static_cast<int>(Population.size()) < config.poblacion;
              i++){
             const vector<ldouble>& entrada = catalogo[i].get();
-            if (semilla_valida(entrada, config.dimension, caso)){
-                vector<ldouble> semilla = entrada;
-                semilla.resize(config.dimension, TOKEN_CONST1);
-                // `caso` se propaga a cada FunbObj: los tokens no cambian
-                // entre casos, solo la ODE que mide fitness(). En Python seria
-                // `FunbObj(semilla, 0, 1, caso)`.
-                Population.push_back(FunbObj(std::move(semilla), 0, 1, caso));
+            auto individuo = semilla_valida(entrada, config.dimension, caso);
+            if (individuo){
+                Population.push_back(std::move(*individuo));
                 semillas_inyectadas++;
             } else {
                 Population.push_back(FunbObj::create_random(config.dimension, caso));
