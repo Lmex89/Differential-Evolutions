@@ -456,7 +456,7 @@ int cuota_semillas(int poblacion, int tamano_catalogo){
 }
 
 // Devuelve el individuo validado o nullopt (en Python, el individuo o None).
-optional<FunbObj> semilla_valida(const vector<ldouble>& entrada, int dimension, int caso){
+optional<FunbObj> construir_semilla_validada(const vector<ldouble>& entrada, int dimension, int caso){
     if (static_cast<int>(entrada.size()) > dimension) return nullopt;
 
     vector<ldouble> semilla = entrada;
@@ -504,7 +504,7 @@ int createPopulation(vector<FunbObj>& Population, const ConfigBusqueda& config,
     // que las semillas historicas).
     //
     // La garantia de runtime (issue #147) valida cada intento antes de
-    // conservarlo: `semilla_valida` exige que la entrada quepa en la dimension,
+    // conservarlo: `construir_semilla_validada` exige que la entrada quepa en la dimension,
     // renderice sin huecos, dependa de x y tenga fitness finita para el caso.
     // Un intento rechazado no se inyecta: su lugar lo ocupa un individuo
     // uniforme para que la poblacion conserve exactamente config.poblacion.
@@ -522,7 +522,7 @@ int createPopulation(vector<FunbObj>& Population, const ConfigBusqueda& config,
              static_cast<int>(Population.size()) < config.poblacion;
              i++){
             const vector<ldouble>& entrada = catalogo[i].get();
-            auto individuo = semilla_valida(entrada, config.dimension, caso);
+            auto individuo = construir_semilla_validada(entrada, config.dimension, caso);
             if (individuo){
                 Population.push_back(std::move(*individuo));
                 semillas_inyectadas++;
