@@ -273,6 +273,16 @@ static void test_construir_semilla_validada() {
     check_bool("construir_semilla_validada rechaza una expresion con huecos",
                !construir_semilla_validada(incompleta, static_cast<int>(incompleta.size()), caso));
 
+    // Con dimension mayor el relleno CONST1 completa el hueco: {ADD, X} se
+    // convierte en ADD(X, 1) y es valida. Ejercita el camino real de relleno.
+    check_bool("construir_semilla_validada acepta un hueco que el relleno completa",
+               construir_semilla_validada(incompleta, dimension, caso).has_value());
+
+    // Una entrada corta que tras el relleno es ADD(1, 1): completa pero sin x.
+    const vector<ldouble> corta_constante = {TOKEN_ADD};
+    check_bool("construir_semilla_validada rechaza una entrada corta sin x",
+               !construir_semilla_validada(corta_constante, dimension, caso));
+
     // 1/x en x=0 produce un valor no finito; el resto de la expresion esta
     // bien formada y depende de x, asi que solo falla la fitness.
     const vector<ldouble> no_finita = {
@@ -679,7 +689,8 @@ static void test_warm_start_rellena_huecos_con_aleatorios() {
 
     srand(20261027);
     ConfigBusqueda frio = config;
-    frio.poblacion = 97;
+    // Aleatorios que consume la poblacion caliente: todo menos las semillas.
+    frio.poblacion = static_cast<int>(poblacion.size()) - sembradas;
     frio.warm_start = false;
     vector<FunbObj> aleatorios;
     createPopulation(aleatorios, frio, 0, catalogo);
@@ -705,7 +716,11 @@ static void test_warm_start_rellena_huecos_con_aleatorios() {
     srand(20261027);
     std::uint64_t firma_rand = inicial;
     for (int i = 0; i < 4096; i++) firma_rand = mezclar(firma_rand, rand());
-    if (firma_rand == UINT64_C(0xc990d7988f1c29e5)) {
+    // Oraculo dependiente de plataforma: solo glibc reproduce este flujo de
+    // rand(). En otra libc se avisa en vez de omitirlo en silencio.
+    if (firma_rand != UINT64_C(0xc990d7988f1c29e5)) {
+        std::cerr << "AVISO: rand() no es el de glibc; se omite la comparacion historica\n";
+    } else {
         // Referencia d265c3c con glibc: 100 individuos de 20 tokens y el sorteo siguiente.
         std::uint64_t firma_poblacion = inicial;
         bool dimensiones_validas = poblacion.size() == 100;
@@ -721,12 +736,17 @@ static void test_warm_start_rellena_huecos_con_aleatorios() {
     }
     check_bool("la semilla aceptada tiene fitness finita en el caso activo",
                std::isfinite(poblacion[0].fitness()) && poblacion[0].fitness() < 1e-6L);
+    FunbObj directo_caso0(rellenada(entradas[0]), 0, 1, 0);
+    check_bool("la fitness de la semilla coincide con evaluarla directamente en el caso 0",
+               poblacion[0].fitness() == directo_caso0.fitness());
 
     srand(20261027);
     vector<FunbObj> otro_caso;
     createPopulation(otro_caso, config, 2, catalogo);
+    FunbObj directo_caso2(rellenada(entradas[0]), 0, 1, 2);
     check_bool("la fitness de la semilla corresponde al ODE case activo",
-               std::isfinite(otro_caso[0].fitness()) && otro_caso[0].fitness() > 1e-6L);
+               otro_caso[0].fitness() == directo_caso2.fitness() &&
+               otro_caso[0].fitness() != poblacion[0].fitness());
 }
 
 static void test_warm_start_omite_entradas_mas_largas_que_la_dimension() {

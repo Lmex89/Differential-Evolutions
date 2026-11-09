@@ -455,7 +455,14 @@ int cuota_semillas(int poblacion, int tamano_catalogo){
     return std::min(sin_tope, tamano_catalogo);
 }
 
-// Devuelve el individuo validado o nullopt (en Python, el individuo o None).
+// Valida una entrada del catalogo y devuelve el individuo listo para inyectar,
+// o nullopt (`optional<T>` en Python seria `T | None`). Criterios (issue #147):
+// 1. la entrada cabe en la dimension (se rellena con CONST1 hasta ella);
+// 2. contiene una hoja dependiente de x;
+// 3. renderiza sin huecos "()";
+// 4. su fitness es finita para el caso activo.
+// Devuelve el mismo FunbObj que calculo la fitness; el llamador lo mueve
+// (`std::move`, equivalente a ceder la referencia en Python) y conserva su cache.
 optional<FunbObj> construir_semilla_validada(const vector<ldouble>& entrada, int dimension, int caso){
     if (static_cast<int>(entrada.size()) > dimension) return nullopt;
 
@@ -504,8 +511,8 @@ int createPopulation(vector<FunbObj>& Population, const ConfigBusqueda& config,
     // que las semillas historicas).
     //
     // La garantia de runtime (issue #147) valida cada intento antes de
-    // conservarlo: `construir_semilla_validada` exige que la entrada quepa en la dimension,
-    // renderice sin huecos, dependa de x y tenga fitness finita para el caso.
+    // conservarlo: `construir_semilla_validada` exige que la entrada quepa en
+    // la dimension, renderice sin huecos, dependa de x y tenga fitness finita para el caso.
     // Un intento rechazado no se inyecta: su lugar lo ocupa un individuo
     // uniforme para que la poblacion conserve exactamente config.poblacion.
     // La cuota del 5% (issue #146) cuenta INTENTOS, no semillas aceptadas:
