@@ -1,66 +1,105 @@
-# Glossary
+# Symbolic ODE solving
 
-Domain-specific terms used in this codebase.
+This context searches for symbolic candidate solutions to ordinary differential equations using evolutionary computation. It assesses candidates against an equation and its initial conditions.
 
-## Mathematics
+## Problem and evaluation
 
-| Term | Definition |
-|------|-----------|
-| **ODE** | Ordinary Differential Equation — an equation involving a function of one variable and its derivatives |
-| **2nd-order ODE** | An ODE involving up to the second derivative of the unknown function, e.g. `y'' + y = 0` |
-| **Initial conditions** | Values of the unknown function and its derivatives at a specific point, e.g. `y(0) = 1, y'(0) = 1` |
-| **Boundary conditions** | Constraints on the solution at the boundaries of the domain |
-| **Closed-form solution** | An exact symbolic expression (e.g. `cos(x) + sin(x)`) rather than a numerical approximation |
+**Ordinary differential equation (ODE)**:
+An equation relating a function of one variable to its derivatives. This project focuses on second-order ODEs, involving derivatives up to the second order.
 
-## Evolutionary computation
+**ODE case**:
+A problem defined by an ODE and its initial conditions, for which the solver searches for a solution.
 
-| Term | Definition |
-|------|-----------|
-| **Differential Evolution (DE)** | A population-based stochastic optimiser that evolves candidate solutions through mutation, crossover, and selection |
-| **Population** | The current set of candidate solutions being evolved |
-| **Individual** | One candidate solution in the population — here, a vector of integer token codes representing a parse tree |
-| **Fitness** | A scalar score measuring how well a candidate satisfies the ODE and its conditions; lower is better |
-| **Elitism** | Strategy of always preserving the best individuals from one generation to the next |
-| **Mutation** | Random perturbation of an individual's token vector to explore new expressions; here `v = x_r1 + F*(x_r2 - x_r3)` (paper eq. (7)) |
-| **DE/rand/1/bin** | The DE variant used here: a random base individual `x_r1` plus one scaled difference vector `F*(x_r2 - x_r3)`, followed by binomial crossover |
-| **Dither** | Drawing the scaling factor `F` randomly (here once per mutation) instead of keeping it fixed |
-| **Trial vector** | The offspring produced by mutation and binomial crossover for one target individual, before selection decides whether it replaces it |
-| **Warm start** | Starting the population from a per-case catalog of 25 known candidate expressions — five case bases first (exact solution or close family), then the five preloaded prototype seeds (#144), then the 15 shared generic blocks (#145) — instead of an all-random draw; opt-in via `ODE_WARM_START=1`. Entries are padded with constant-1 tokens to the configured dimension, capped at `min(ceil(0.05 × population), catalog size)`, and validated at injection time for hole-free rendering, x-dependence and finite fitness; a rejected or oversized entry leaves a uniform-random individual in its slot |
-| **Recombination / Crossover** | Combining tokens from two or more parent individuals to produce offspring |
-| **Generation** | One iteration of the evolutionary loop |
-| **Convergence** | When fitness drops below a threshold (1e-5), indicating a sufficiently good solution has been found |
-| **Restart escalation** | Growing the replacement fraction across consecutive restarts without a new best (0.4 → 0.6 → 0.8 by default), capped by `ODE_RESTART_FRACTION` |
-| **Restart lifecycle** | The per-run decision process that observes fitness improvement and diversity, tracks staleness and restart escalation, decides whether a restart is due, and applies the legacy or adaptive population replacement |
-| **Restart outcome** | The result of one per-generation Restart lifecycle pass: either no restart, or the trigger, stale-generation count, replacement fraction, kept/replaced counts, and adaptive mutation share of an actual restart |
-| **Refinement-only restart** | Degraded restart after `ODE_RESTART_CAP` consecutive restarts without improvement: fraction 0.2 and mutation share 1.0 until a `new_best` resets the ladder. The adaptive routine (#127) consumes the share as 1–2-token elite point mutations and keeps the all-time record in the population |
-| **Diversity trigger** | Adaptive-mode restart fired when the coefficient of variation (population std / mean) of the finite fitnesses drops below `ODE_DIV_THRESHOLD` (0.05), provided at least 25% of the population is finite and a finite record exists. It shares the escalation ladder with the stale trigger, logs `trigger=diversity`, and any restart resets the stale-generation window |
+**Initial conditions**:
+The required values of a solution and its derivatives at a specified point.
 
-## Expression representation
+**Closed-form solution**:
+An exact symbolic expression that satisfies the ODE and its conditions, rather than a numerical approximation.
 
-| Term | Definition |
-|------|-----------|
-| **Parse tree** | A tree structure representing a mathematical expression; here encoded as a flat vector of integer tokens |
-| **Prefix notation** | Operators precede their operands (e.g. `+ 1 2` instead of `1 + 2`); used for the token encoding |
-| **Token** | An integer code representing a constant, variable, or operation (see token table in README) |
-| **Arity** | The number of operands an operator takes (0 for constants/variables, 1 for unary ops, 2 for binary ops) |
-| **Alphabet** | The complete set of available tokens (29 tokens in this implementation) |
+**Candidate solution**:
+A symbolic expression proposed as a solution to an ODE case. A candidate may be invalid or fail to satisfy the problem.
+_Avoid_: Solution, when the candidate has not been shown to satisfy the problem.
 
-## Dual-number arithmetic
+**Residual**:
+The discrepancy obtained by substituting a candidate and its derivatives into the ODE at a point. A zero residual indicates that the equation is satisfied at that point.
 
-| Term | Definition |
-|------|-----------|
-| **Dual number** | A number of the form `a + bε` where `ε² = 0`; extends real numbers to carry derivative information |
-| **2nd-order dual number (2dual)** | An extension carrying value, first derivative, and second derivative: `[f, f', f'']` |
-| **Automatic differentiation** | Computing derivatives alongside function evaluation using algebraic rules on dual numbers |
-| **Forward pass** | Evaluating an expression tree from leaves to root, propagating dual-number components at each step |
-| **`parsv()`** | The main evaluation function — takes a token vector and a dual-number input `[x, y', y'']` and returns `[y(x), y'(x), y''(x)]` |
+**Fitness**:
+A score measuring how well a candidate satisfies the ODE and its initial conditions; lower is better.
 
-## Codebase-specific
+**Convergence**:
+The search outcome in which the best fitness falls below the chosen threshold. It does not by itself establish an exact closed-form solution.
 
-| Term | Definition |
-|------|-----------|
-| **`FunbObj`** | The C++ class representing a candidate solution — holds the token vector, evaluates the parse tree, and computes fitness |
-| **`x_rango()`** | Generates the evaluation grid (array of `[x, 1.0, 0.0]` triples) over which fitness is measured; exactly `npoints` points with both endpoints included (100 for `[0,1]`, paper §5) |
-| **`OperF` / `OperF2`** | Functions that dispatch unary (1-arg) and binary (2-arg) operations on dual-number vectors |
-| **`narg()`** | Returns the arity (number of arguments) for a given token code |
-| **`FunbObj::create_random()`** | Builds one complete random individual for a run's ODE case. It starts the configured-size token vector with an operator, then inserts `x` if needed; the repair can overwrite that first token |
+## Evolutionary search
+
+**Differential Evolution (DE)**:
+A population-based stochastic search method that evolves candidate solutions through mutation, crossover and selection.
+
+**Individual**:
+One candidate solution participating in the evolutionary search.
+
+**Population**:
+The current collection of individuals being evolved.
+
+**Generation**:
+One iteration of the evolutionary search over the population.
+
+**Mutation**:
+The creation of a candidate by perturbing existing individuals to explore the search space.
+
+**Crossover**:
+The combination of a mutated candidate and a target individual to produce a trial candidate.
+_Avoid_: Recombination, when a single canonical term is needed.
+
+**Trial candidate**:
+An offspring considered for replacing a target individual during selection.
+_Avoid_: Trial vector, when referring to the candidate rather than its representation.
+
+**Record**:
+The best candidate found so far in a search, including candidates no longer in the current population.
+
+**Warm start**:
+Initialization that includes selected candidate expressions appropriate to the ODE case alongside randomly generated individuals.
+
+**Staleness**:
+The passage of generations without an improvement to the record.
+
+**Fitness diversity**:
+The variation in fitness among individuals with finite fitness in a population. It measures variation in scores, not necessarily differences between expressions.
+
+**Restart**:
+Replacement of part of the population to continue searching after a restart condition is met, while preserving the record.
+
+**Stale trigger**:
+A restart condition based on staleness.
+
+**Diversity trigger**:
+A restart condition based on low fitness diversity among sufficiently many individuals with finite fitness.
+
+**Restart escalation**:
+The adjustment of adaptive restart behavior across consecutive restarts without a new record.
+
+**Refinement-only restart**:
+An adaptive restart focused on small mutations of strong candidates rather than fresh random candidates, after repeated restarts without a new record.
+
+## Symbolic expressions
+
+**Parse tree**:
+The tree structure of a symbolic expression, whose operators connect their operands.
+
+**Token**:
+A symbol representing a constant, a variable or an operation in a candidate expression.
+
+**Alphabet**:
+The set of tokens available for constructing candidate expressions.
+
+**Arity**:
+The number of operands required by an expression symbol.
+
+**Prefix notation**:
+An expression notation in which an operator precedes its operands.
+
+**Second-order dual number (2dual)**:
+A quantity carrying a function's value, first derivative and second derivative together for evaluation.
+
+**Automatic differentiation**:
+The computation of derivatives alongside expression values by applying differentiation rules to elementary operations.
