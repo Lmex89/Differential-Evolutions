@@ -18,12 +18,12 @@
 #include <string>
 #include <cstdlib>
 #include <array>
+#include <cstdint>
 
 #include "dualfunctions.h"  // ahora autocontenido: incluye <vector>/<string> por si mismo
 #include "token.h"          // expone el contrato publico del rango del alfabeto
 #include "precargadas_prototipo.h"  // oraculo independiente del tramo precargado (#144)
 #include "genericos_esperados.h"    // oraculo independiente del tramo generico (#145)
-#include "poblacion_historica_esperada.h"
 
 // En vez de declarar prototipos sueltos, este test incluye parse_tree.cpp
 // entero: createPopulation y FunbObj viven ahi sin header. En Python seria
@@ -677,16 +677,48 @@ static void test_warm_start_rellena_huecos_con_aleatorios() {
     check_bool("la sexta entrada queda fuera de la cuota",
                poblacion[5].vecvalue() != rellenada(entradas[5]));
 
-    bool poblacion_igual = poblacion.size() == POBLACION_HISTORICA.size();
+    srand(20261027);
+    ConfigBusqueda frio = config;
+    frio.poblacion = 97;
+    frio.warm_start = false;
+    vector<FunbObj> aleatorios;
+    createPopulation(aleatorios, frio, 0, catalogo);
+    const int siguiente_frio = rand();
+    size_t indice_aleatorio = 0;
+    bool secuencia_igual = true;
     for (size_t i = 0; i < poblacion.size(); i++) {
-        if (i >= POBLACION_HISTORICA.size() ||
-            poblacion[i].vecvalue() != POBLACION_HISTORICA[i]) {
-            poblacion_igual = false;
+        if (i == 0 || i == 3 || i == 4) continue;
+        if (indice_aleatorio >= aleatorios.size() ||
+            poblacion[i].vecvalue() != aleatorios[indice_aleatorio++].vecvalue()) {
+            secuencia_igual = false;
         }
     }
-    check_bool("poblacion con rechazos y relleno coincide con la revision historica", poblacion_igual);
-    check_int("semillas inyectadas coinciden con la revision historica", sembradas, SEMBRADAS_HISTORICAS);
-    check_int("siguiente sorteo coincide con la revision historica", siguiente_caliente, SORTEO_HISTORICO);
+    check_bool("rechazos y cola conservan toda la secuencia aleatoria",
+               secuencia_igual && indice_aleatorio == aleatorios.size());
+    check_int("warm start conserva el siguiente sorteo", siguiente_caliente, siguiente_frio);
+
+    // FNV-1a por entero, modulo 2^64; en Python: h = ((h ^ n) * 1099511628211) & ((1 << 64) - 1).
+    auto mezclar = [](std::uint64_t h, std::uint64_t n) {
+        return (h ^ n) * UINT64_C(1099511628211);
+    };
+    constexpr std::uint64_t inicial = UINT64_C(14695981039346656037);
+    srand(20261027);
+    std::uint64_t firma_rand = inicial;
+    for (int i = 0; i < 4096; i++) firma_rand = mezclar(firma_rand, rand());
+    if (firma_rand == UINT64_C(0xc990d7988f1c29e5)) {
+        // Referencia d265c3c con glibc: 100 individuos de 20 tokens y el sorteo siguiente.
+        std::uint64_t firma_poblacion = inicial;
+        bool dimensiones_validas = poblacion.size() == 100;
+        for (const auto& individuo : poblacion) {
+            const auto tokens = individuo.vecvalue();
+            dimensiones_validas = dimensiones_validas && tokens.size() == 20;
+            for (const auto token : tokens) firma_poblacion = mezclar(firma_poblacion, static_cast<std::uint64_t>(token));
+        }
+        check_bool("poblacion completa coincide con la revision historica",
+                   dimensiones_validas && firma_poblacion == UINT64_C(0x97373430fb29549f));
+        check_int("semillas inyectadas coinciden con la revision historica", sembradas, 3);
+        check_int("siguiente sorteo coincide con la revision historica", siguiente_caliente, 924363465);
+    }
     check_bool("la semilla aceptada tiene fitness finita en el caso activo",
                std::isfinite(poblacion[0].fitness()) && poblacion[0].fitness() < 1e-6L);
 
